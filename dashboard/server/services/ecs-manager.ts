@@ -111,7 +111,12 @@ function getCloudWatchLogsClient(): CloudWatchLogsClient {
 
 export async function runTask(instanceId: string): Promise<TaskInfo> {
   const client = getECSClient();
+  const creds = getCredentials();
   const config = getAllConfig();
+
+  if (!creds) {
+    throw new Error('AWS credentials not configured');
+  }
 
   const clusterName = config.cluster_name || 'vibe-cluster';
   const taskDefinition = config.task_definition || 'vibe-coding-lab';
@@ -144,6 +149,10 @@ export async function runTask(instanceId: string): Promise<TaskInfo> {
             name: 'vibe-container',
             environment: [
               { name: 'INSTANCE_ID', value: instanceId },
+              // Pass AWS credentials for Cline/Bedrock access
+              { name: 'AWS_ACCESS_KEY_ID', value: creds.access_key_id },
+              { name: 'AWS_SECRET_ACCESS_KEY', value: creds.secret_access_key },
+              { name: 'AWS_REGION', value: creds.region },
             ],
           },
         ],

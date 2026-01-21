@@ -17,13 +17,18 @@ RUN apt-get update && apt-get install -y curl gnupg dos2unix \
 WORKDIR /home/workspace
 RUN chown -R openvscode-server:openvscode-server /home/workspace
 
-# 4. Install Cline Extension as the correct user (fixes extension loading issues)
-USER openvscode-server
-RUN wget -O /tmp/cline.vsix https://open-vsx.org/api/saoudrizwan/claude-dev/${CLINE_VERSION}/file/saoudrizwan.claude-dev-${CLINE_VERSION}.vsix \
-    && /home/.openvscode-server/bin/openvscode-server --install-extension /tmp/cline.vsix \
-    && rm /tmp/cline.vsix
+# 4. Install Cline Extension by manually extracting to the extensions directory
+#    The --install-extension command doesn't work reliably, so we manually extract the vsix
+RUN apt-get update && apt-get install -y unzip && rm -rf /var/lib/apt/lists/* \
+    && wget -O /tmp/cline.vsix https://open-vsx.org/api/saoudrizwan/claude-dev/${CLINE_VERSION}/file/saoudrizwan.claude-dev-${CLINE_VERSION}.vsix \
+    && mkdir -p /home/.openvscode-server/extensions/saoudrizwan.claude-dev-${CLINE_VERSION} \
+    && unzip -q /tmp/cline.vsix -d /tmp/cline-ext \
+    && cp -r /tmp/cline-ext/extension/* /home/.openvscode-server/extensions/saoudrizwan.claude-dev-${CLINE_VERSION}/ \
+    && rm -rf /tmp/cline.vsix /tmp/cline-ext \
+    && chown -R openvscode-server:openvscode-server /home/.openvscode-server/extensions/saoudrizwan.claude-dev-${CLINE_VERSION}
 
-# 5. Install React App
+# 5. Install React App (as openvscode-server user)
+USER openvscode-server
 RUN mkdir temp-app \
     && cd temp-app \
     && npx -y create-vite . --template react \

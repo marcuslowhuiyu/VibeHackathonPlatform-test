@@ -592,11 +592,11 @@ export async function buildAndPushImage(
     await execAsync(loginCmd);
     report({ success: true, step: 'docker_login', message: 'Logged into ECR' });
 
-    // Build Docker image
-    report({ success: true, step: 'docker_build', message: 'Building Docker image (this may take a few minutes)...' });
+    // Build Docker image (--no-cache ensures fresh build with latest changes)
+    report({ success: true, step: 'docker_build', message: 'Building Docker image with --no-cache (this may take several minutes)...' });
     const dockerfilePath = path.resolve(__dirname, '../../../cline-setup');
-    const buildCmd = `docker build -t vibe-coding-lab:latest "${dockerfilePath}"`;
-    await execAsync(buildCmd, { maxBuffer: 50 * 1024 * 1024 }); // 50MB buffer for build output
+    const buildCmd = `docker build --no-cache -t vibe-coding-lab:latest "${dockerfilePath}"`;
+    await execAsync(buildCmd, { maxBuffer: 50 * 1024 * 1024, timeout: 600000 }); // 50MB buffer, 10min timeout
     report({ success: true, step: 'docker_build', message: 'Docker image built successfully' });
 
     // Tag image

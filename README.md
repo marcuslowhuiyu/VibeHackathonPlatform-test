@@ -544,6 +544,51 @@ VibeHackathonPlatform/
 
 ---
 
+## Data Storage & Security
+
+### Where is my data stored?
+
+All data is stored locally in a single JSON file:
+
+```
+dashboard/data/db.json
+```
+
+This file contains:
+- **AWS Credentials** (Access Key ID, Secret Access Key, Region)
+- **Instance Data** (IDs, URLs, participant info)
+- **AWS Config** (VPC, subnets, security group IDs)
+
+### Does my data persist?
+
+**Yes** - The `db.json` file persists on disk. When you stop and restart the dashboard server, all your credentials, config, and instance data will still be there.
+
+### Is my data safe from GitHub?
+
+**Yes** - The `dashboard/data/` folder is in `.gitignore` and will never be committed to git. You can verify this:
+
+```bash
+# Check that no credential files are tracked
+git ls-files | grep -E "(db\.json|data/)"
+# Should return nothing
+
+# Check gitignore includes the data folder
+cat .gitignore | grep "dashboard/data"
+# Should show: dashboard/data/
+```
+
+### Resetting your data
+
+To start fresh, simply delete the database file:
+
+```bash
+rm dashboard/data/db.json
+```
+
+The dashboard will create a new empty database on next startup.
+
+---
+
 ## Local Development
 
 ### Modify the Dashboard

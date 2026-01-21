@@ -438,6 +438,65 @@ For 50-100 instances, check these AWS limits:
 
 ## Troubleshooting
 
+### Dashboard not loading / Wrong app showing
+
+If you see a different application (not "Vibe Dashboard") or the page doesn't load:
+
+1. **Kill any processes using the ports:**
+
+   **Windows (PowerShell/CMD):**
+   ```cmd
+   # Find processes on port 5173 and 3001
+   netstat -ano | findstr :5173
+   netstat -ano | findstr :3001
+
+   # Kill the process (replace <PID> with the number from above)
+   taskkill /PID <PID> /F
+   ```
+
+   **Mac/Linux:**
+   ```bash
+   # Find and kill processes on ports
+   lsof -ti:5173 | xargs kill -9
+   lsof -ti:3001 | xargs kill -9
+   ```
+
+2. **Clear the Vite cache:**
+   ```bash
+   cd dashboard/client
+   rm -rf node_modules/.vite
+   # Windows: rmdir /s /q node_modules\.vite
+   ```
+
+3. **Restart the dashboard:**
+   ```bash
+   cd dashboard
+   npm run dev
+   ```
+
+4. **Open in incognito/private window** to avoid browser cache issues:
+   - Go to http://localhost:5173
+   - You should see "Vibe Dashboard" with three tabs: Instances, Setup, Settings
+
+### Buttons not working / No network requests
+
+If clicking buttons does nothing:
+
+1. Make sure **both servers are running** - you should see:
+   ```
+   Vibe Dashboard Server
+   Running on: http://localhost:3001
+   ```
+   AND
+   ```
+   VITE ready
+   Local: http://localhost:5173
+   ```
+
+2. Check browser console (F12) for JavaScript errors
+
+3. Verify the backend is reachable: open http://localhost:3001/api/health in your browser - you should see `{"status":"ok"}`
+
 ### Instances stuck in "Starting"
 - Check ECS task logs in CloudWatch (`/ecs/vibe-coding-lab`)
 - Verify security group allows ports 8080 and 3000
@@ -583,9 +642,90 @@ To start fresh, simply delete the database file:
 
 ```bash
 rm dashboard/data/db.json
+# Windows: del dashboard\data\db.json
 ```
 
 The dashboard will create a new empty database on next startup.
+
+---
+
+## Pushing to Git Safely
+
+Your AWS credentials are stored locally and should **never** be committed to git. Here's how to ensure you don't leak sensitive data:
+
+### Before pushing, always verify:
+
+```bash
+# 1. Check that no sensitive files are staged
+git status
+
+# 2. Verify db.json is NOT in the list of changes
+git diff --cached --name-only | grep -E "(db\.json|\.env|credentials)"
+# Should return nothing
+
+# 3. Double-check .gitignore is working
+git ls-files | grep -E "(db\.json|data/)"
+# Should return nothing
+```
+
+### What's already protected (in .gitignore):
+
+- `dashboard/data/` - Contains `db.json` with your AWS credentials
+- `node_modules/` - Dependencies
+- `.env` files - Environment variables
+- `*.log` - Log files
+
+### Safe push workflow:
+
+```bash
+# 1. Check what will be committed
+git status
+git diff --cached
+
+# 2. If you see any sensitive files, unstage them:
+git reset HEAD dashboard/data/db.json
+
+# 3. Add only the files you want
+git add -p  # Interactive mode - review each change
+
+# 4. Commit and push
+git commit -m "Your message"
+git push
+```
+
+### If you accidentally committed credentials:
+
+**STOP!** Don't push yet. Remove the sensitive data:
+
+```bash
+# Remove the file from git history (keeps local file)
+git rm --cached dashboard/data/db.json
+git commit -m "Remove sensitive data from tracking"
+
+# If already pushed, you need to rotate your AWS credentials immediately:
+# 1. Go to AWS Console → IAM → Users → Security credentials
+# 2. Delete the old access key
+# 3. Create a new access key
+# 4. Update the dashboard with new credentials
+```
+
+### Pro tip: Use git hooks
+
+Add a pre-commit hook to prevent accidental commits of sensitive files:
+
+```bash
+# Create .git/hooks/pre-commit
+cat > .git/hooks/pre-commit << 'EOF'
+#!/bin/bash
+if git diff --cached --name-only | grep -qE "(db\.json|\.env|credentials|secret)"; then
+    echo "ERROR: Attempting to commit potentially sensitive files!"
+    echo "Blocked files:"
+    git diff --cached --name-only | grep -E "(db\.json|\.env|credentials|secret)"
+    exit 1
+fi
+EOF
+chmod +x .git/hooks/pre-commit
+```
 
 ---
 

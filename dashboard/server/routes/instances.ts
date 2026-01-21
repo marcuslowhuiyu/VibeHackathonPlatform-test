@@ -17,10 +17,10 @@ router.get('/', async (req, res) => {
   try {
     const instances = getAllInstances();
 
-    // Update status from AWS for running instances
+    // Update status from AWS for active instances (including stopping)
     const updatedInstances = await Promise.all(
       instances.map(async (instance) => {
-        if (instance.task_arn && ['provisioning', 'running', 'pending'].includes(instance.status)) {
+        if (instance.task_arn && ['provisioning', 'running', 'pending', 'stopping'].includes(instance.status)) {
           const taskInfo = await getTaskStatus(instance.task_arn);
           if (taskInfo) {
             const newStatus = taskInfo.status.toLowerCase();

@@ -1,6 +1,9 @@
 # 1. Base Image: OpenVSCode Server
 FROM gitpod/openvscode-server:latest
 
+# Build arguments for customization
+ARG CLINE_VERSION=3.46.1
+
 # Switch to root to perform system installations
 USER root
 
@@ -11,8 +14,8 @@ RUN apt-get update && apt-get install -y curl gnupg dos2unix \
     && apt-get install -y nodejs jq \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. Install Cline Extension (via Open VSX)
-RUN wget -O cline.vsix https://open-vsx.org/api/saoudrizwan/claude-dev/3.46.1/file/saoudrizwan.claude-dev-3.46.1.vsix \
+# 3. Install Cline Extension (via Open VSX) - version is configurable via build arg
+RUN wget -O cline.vsix https://open-vsx.org/api/saoudrizwan/claude-dev/${CLINE_VERSION}/file/saoudrizwan.claude-dev-${CLINE_VERSION}.vsix \
     && /home/.openvscode-server/bin/openvscode-server --install-extension cline.vsix \
     && rm cline.vsix
 

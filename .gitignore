@@ -1,1 +1,46 @@
+# Dependencies
+node_modules/
+dashboard/node_modules/
+dashboard/client/node_modules/
+
+# Data files (contains AWS credentials!)
+dashboard/data/
+*.db
+*.sqlite
+
+# Environment files
+.env
+.env.*
+*.env
+
+# Build outputs
+dist/
+build/
+dashboard/client/dist/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+nul
+
+# Claude Code
+.claude/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local development
 local.md
+local.txt
+
+# Terraform state (if using infrastructure folder)
+infrastructure/*.tfstate
+infrastructure/*.tfstate.*
+infrastructure/.terraform/

@@ -23,6 +23,11 @@ const EDITABLE_FILES: Record<string, { path: string; description: string; langua
     description: 'Container startup script - runs when the container starts',
     language: 'bash',
   },
+  'cline-config.json': {
+    path: join(PROJECT_ROOT, 'cline-setup', 'cline-config.json'),
+    description: 'Cline AI assistant settings - model, instructions, auto-approval',
+    language: 'json',
+  },
 };
 
 // Check current setup status

@@ -1,0 +1,12 @@
+{
+  "apiProvider": "bedrock",
+  "awsRegion": "us-east-1",
+  "awsUseProfile": "default",
+  "apiModelId": "anthropic.claude-sonnet-4-20250514-v1:0",
+  "customInstructions": "You are helping a hackathon participant build a web application. Be concise and helpful. Focus on React and modern web development best practices.",
+  "autoApprovalSettings": {
+    "enabled": false,
+    "maxRequests": 10,
+    "enableNotifications": true
+  }
+}

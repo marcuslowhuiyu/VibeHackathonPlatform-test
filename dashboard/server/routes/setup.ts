@@ -70,13 +70,38 @@ router.get('/docker-status', async (req, res) => {
   }
 });
 
-// Build and push Docker image
+// Build and push Docker image (original - for backwards compatibility)
 router.post('/build-and-push', async (req, res) => {
   try {
     const result = await buildAndPushImage();
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Build and push Docker image with SSE streaming progress
+router.get('/build-and-push-stream', async (req, res) => {
+  // Set up SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const sendEvent = (data: object) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    const result = await buildAndPushImage((progress) => {
+      sendEvent({ type: 'progress', ...progress });
+    });
+
+    sendEvent({ type: 'complete', success: result.success, steps: result.steps, error: result.error });
+  } catch (err: any) {
+    sendEvent({ type: 'error', error: err.message });
+  } finally {
+    res.end();
   }
 });
 

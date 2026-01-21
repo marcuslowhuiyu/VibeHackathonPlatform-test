@@ -572,6 +572,8 @@ export default function SetupGuide() {
   const [dockerSteps, setDockerSteps] = useState<DockerStep[]>([])
   const [showManualDocker, setShowManualDocker] = useState(false)
   const [copiedDocker, setCopiedDocker] = useState(false)
+  const [isBuilding, setIsBuilding] = useState(false)
+  const [buildError, setBuildError] = useState<string | null>(null)
 
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['setup-status'],
@@ -600,15 +602,51 @@ export default function SetupGuide() {
     },
   })
 
-  const buildMutation = useMutation({
-    mutationFn: api.buildAndPushImage,
-    onSuccess: (result) => {
-      if (result.steps) {
-        setDockerSteps(result.steps)
+  // SSE-based build for real-time progress
+  const startBuild = () => {
+    setIsBuilding(true)
+    setBuildError(null)
+    setDockerSteps([])
+
+    const eventSource = new EventSource('/api/setup/build-and-push-stream')
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+
+        if (data.type === 'progress') {
+          setDockerSteps((prev) => {
+            const existing = prev.findIndex((s) => s.step === data.step)
+            if (existing >= 0) {
+              const updated = [...prev]
+              updated[existing] = data
+              return updated
+            }
+            return [...prev, data]
+          })
+        } else if (data.type === 'complete') {
+          setIsBuilding(false)
+          eventSource.close()
+          queryClient.invalidateQueries({ queryKey: ['setup-status'] })
+          if (!data.success && data.error) {
+            setBuildError(data.error)
+          }
+        } else if (data.type === 'error') {
+          setIsBuilding(false)
+          setBuildError(data.error)
+          eventSource.close()
+        }
+      } catch (err) {
+        console.error('Failed to parse SSE data:', err)
       }
-      queryClient.invalidateQueries({ queryKey: ['setup-status'] })
-    },
-  })
+    }
+
+    eventSource.onerror = () => {
+      setIsBuilding(false)
+      setBuildError('Connection lost. Please try again.')
+      eventSource.close()
+    }
+  }
 
   const copyDockerCommands = () => {
     if (dockerCommands?.commands) {
@@ -854,11 +892,11 @@ export default function SetupGuide() {
           </p>
 
           <button
-            onClick={() => buildMutation.mutate()}
-            disabled={buildMutation.isPending || !dockerStatus?.available}
+            onClick={startBuild}
+            disabled={isBuilding || !dockerStatus?.available}
             className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 rounded-lg flex items-center gap-2 font-medium"
           >
-            {buildMutation.isPending ? (
+            {isBuilding ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" />
                 Building & Pushing...
@@ -871,16 +909,42 @@ export default function SetupGuide() {
             )}
           </button>
 
-          {dockerSteps.length > 0 && (
-            <div>
-              <h3 className="text-sm font-medium text-gray-300 mb-3">Build Progress</h3>
+          {/* Real-time Progress Bar */}
+          {(isBuilding || dockerSteps.length > 0) && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-300 font-medium">Build Progress</span>
+                <span className="text-gray-400">
+                  {dockerSteps.filter((s) => s.success && s.step !== 'error').length} / 7 steps
+                </span>
+              </div>
+
+              {/* Progress Bar */}
+              <div className="w-full bg-gray-700 rounded-full h-3 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-500 ease-out"
+                  style={{
+                    width: `${Math.min(100, (dockerSteps.filter((s) => s.success && s.step !== 'error').length / 7) * 100)}%`,
+                  }}
+                />
+              </div>
+
+              {/* Current Step */}
+              {isBuilding && dockerSteps.length > 0 && (
+                <div className="flex items-center gap-2 text-sm text-blue-400">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  {dockerSteps[dockerSteps.length - 1]?.message}
+                </div>
+              )}
+
+              {/* Step Details */}
               <DockerProgressDisplay steps={dockerSteps} />
             </div>
           )}
 
-          {buildMutation.data?.error && (
+          {buildError && (
             <div className="p-4 bg-red-900/30 border border-red-700 rounded-lg">
-              <p className="text-red-400">{buildMutation.data.error}</p>
+              <p className="text-red-400">{buildError}</p>
             </div>
           )}
 

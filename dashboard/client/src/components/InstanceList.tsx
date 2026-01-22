@@ -25,6 +25,9 @@ import {
   Link,
   Calendar,
   Cloud,
+  Lock,
+  Unlock,
+  Globe,
 } from 'lucide-react'
 import { api, Instance } from '../lib/api'
 
@@ -439,9 +442,19 @@ export default function InstanceList({ instances }: InstanceListProps) {
                 </div>
 
                 {/* URLs */}
-                <div className="flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
+                <div className="flex flex-wrap gap-2 items-center" onClick={(e) => e.stopPropagation()}>
                   {instance.vscode_url ? (
                     <>
+                      {/* HTTPS indicator */}
+                      {instance.vscode_url.startsWith('https://') ? (
+                        <span className="text-green-400 flex items-center gap-1" title="Secure HTTPS connection">
+                          <Lock className="w-3 h-3" />
+                        </span>
+                      ) : (
+                        <span className="text-yellow-400 flex items-center gap-1" title="HTTP connection (CloudFront deploying...)">
+                          <Unlock className="w-3 h-3" />
+                        </span>
+                      )}
                       <a
                         href={instance.vscode_url}
                         target="_blank"
@@ -466,6 +479,13 @@ export default function InstanceList({ instances }: InstanceListProps) {
                       {['provisioning', 'pending'].includes(instance.status.toLowerCase())
                         ? 'Starting up...'
                         : 'No URLs available'}
+                    </span>
+                  )}
+                  {/* CloudFront deploying indicator */}
+                  {instance.cloudfront_status && instance.cloudfront_status !== 'Deployed' && (
+                    <span className="text-xs text-yellow-400 flex items-center gap-1" title="CloudFront distribution is deploying">
+                      <Globe className="w-3 h-3 animate-pulse" />
+                      HTTPS deploying...
                     </span>
                   )}
                 </div>
@@ -582,17 +602,46 @@ export default function InstanceList({ instances }: InstanceListProps) {
                     </h4>
 
                     <div className="space-y-2 text-sm">
+                      {/* CloudFront Status */}
+                      {instance.cloudfront_distribution_id && (
+                        <div className="flex flex-col">
+                          <span className="text-gray-500 text-xs">CloudFront Status</span>
+                          <div className="flex items-center gap-2">
+                            {instance.cloudfront_status === 'Deployed' ? (
+                              <>
+                                <Lock className="w-3 h-3 text-green-400" />
+                                <span className="text-green-400 text-xs">HTTPS Ready</span>
+                              </>
+                            ) : (
+                              <>
+                                <Globe className="w-3 h-3 text-yellow-400 animate-pulse" />
+                                <span className="text-yellow-400 text-xs">
+                                  Deploying ({instance.cloudfront_status})
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
                       <div className="flex flex-col">
                         <span className="text-gray-500 text-xs">VS Code URL</span>
                         {instance.vscode_url ? (
-                          <a
-                            href={instance.vscode_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-400 hover:text-blue-300 text-xs break-all"
-                          >
-                            {instance.vscode_url}
-                          </a>
+                          <div className="flex items-center gap-1">
+                            {instance.vscode_url.startsWith('https://') ? (
+                              <Lock className="w-3 h-3 text-green-400" />
+                            ) : (
+                              <Unlock className="w-3 h-3 text-yellow-400" />
+                            )}
+                            <a
+                              href={instance.vscode_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-400 hover:text-blue-300 text-xs break-all"
+                            >
+                              {instance.vscode_url}
+                            </a>
+                          </div>
                         ) : (
                           <span className="text-gray-500 text-xs">Not available</span>
                         )}
@@ -613,6 +662,16 @@ export default function InstanceList({ instances }: InstanceListProps) {
                           <span className="text-gray-500 text-xs">Not available</span>
                         )}
                       </div>
+
+                      {/* Direct IP fallback */}
+                      {instance.public_ip && instance.cloudfront_status !== 'Deployed' && (
+                        <div className="flex flex-col">
+                          <span className="text-gray-500 text-xs">Direct IP (HTTP fallback)</span>
+                          <span className="text-gray-400 text-xs">
+                            {instance.public_ip}:8080
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
 

@@ -9,8 +9,74 @@ import {
   Instance,
 } from '../db/database.js';
 import { runTask, stopTask, getTaskStatus } from '../services/ecs-manager.js';
+import {
+  createDistribution,
+  getDistributionStatus,
+  disableDistribution,
+  deleteDistribution,
+} from '../services/cloudfront-manager.js';
 
 const router = Router();
+
+// Helper to create CloudFront distribution for an instance
+async function ensureCloudFrontDistribution(instance: Instance, publicIp: string): Promise<void> {
+  // Skip if already has CloudFront or no public IP
+  if (!publicIp || instance.cloudfront_distribution_id) {
+    // If we have a distribution, check its status
+    if (instance.cloudfront_distribution_id) {
+      try {
+        const status = await getDistributionStatus(instance.cloudfront_distribution_id);
+        if (status && status.status !== instance.cloudfront_status) {
+          updateInstance(instance.id, {
+            cloudfront_status: status.status,
+          });
+          instance.cloudfront_status = status.status;
+        }
+      } catch (err) {
+        console.error(`Error checking CloudFront status for ${instance.id}:`, err);
+      }
+    }
+    return;
+  }
+
+  // Create new CloudFront distribution
+  try {
+    console.log(`Creating CloudFront distribution for instance ${instance.id} with IP ${publicIp}`);
+    const distribution = await createDistribution(instance.id, publicIp);
+
+    updateInstance(instance.id, {
+      cloudfront_distribution_id: distribution.distributionId,
+      cloudfront_domain: distribution.domainName,
+      cloudfront_status: distribution.status,
+      public_ip: publicIp,
+    });
+
+    instance.cloudfront_distribution_id = distribution.distributionId;
+    instance.cloudfront_domain = distribution.domainName;
+    instance.cloudfront_status = distribution.status;
+    instance.public_ip = publicIp;
+
+    console.log(`CloudFront distribution created: ${distribution.domainName}`);
+  } catch (err: any) {
+    console.error(`Error creating CloudFront distribution for ${instance.id}:`, err);
+    // Don't fail the whole request, just log the error
+    // The instance will still work with direct IP access
+  }
+}
+
+// Helper to clean up CloudFront distribution
+async function cleanupCloudFront(instance: Instance): Promise<void> {
+  if (!instance.cloudfront_distribution_id) return;
+
+  try {
+    console.log(`Disabling CloudFront distribution for instance ${instance.id}`);
+    await disableDistribution(instance.cloudfront_distribution_id);
+    // Note: Full deletion happens asynchronously after distribution is deployed
+    // We could set up a background job to clean these up later
+  } catch (err: any) {
+    console.error(`Error disabling CloudFront for ${instance.id}:`, err);
+  }
+}
 
 // Get all instances
 router.get('/', async (req, res) => {
@@ -24,18 +90,37 @@ router.get('/', async (req, res) => {
           const taskInfo = await getTaskStatus(instance.task_arn);
           if (taskInfo) {
             const newStatus = taskInfo.status.toLowerCase();
-            const vscodeUrl = taskInfo.publicIp ? `http://${taskInfo.publicIp}:8080` : null;
-            const appUrl = taskInfo.publicIp ? `http://${taskInfo.publicIp}:3000` : null;
+
+            // Create CloudFront distribution if we have a public IP and instance is running
+            if (taskInfo.publicIp && newStatus === 'running') {
+              await ensureCloudFrontDistribution(instance, taskInfo.publicIp);
+            }
+
+            // Use CloudFront URLs (HTTPS) if available and deployed, otherwise fall back to direct IP
+            let vscodeUrl: string | null = null;
+            let appUrl: string | null = null;
+
+            if (instance.cloudfront_domain && instance.cloudfront_status === 'Deployed') {
+              // CloudFront is ready - use HTTPS URLs
+              vscodeUrl = `https://${instance.cloudfront_domain}`;
+              appUrl = `https://${instance.cloudfront_domain}:3000`; // Note: CloudFront only handles port 8080
+            } else if (taskInfo.publicIp) {
+              // Fall back to direct IP while CloudFront is deploying
+              vscodeUrl = `http://${taskInfo.publicIp}:8080`;
+              appUrl = `http://${taskInfo.publicIp}:3000`;
+            }
 
             if (instance.status !== newStatus || instance.vscode_url !== vscodeUrl) {
               updateInstance(instance.id, {
                 status: newStatus,
                 vscode_url: vscodeUrl,
                 app_url: appUrl,
+                public_ip: taskInfo.publicIp || instance.public_ip,
               });
               instance.status = newStatus;
               instance.vscode_url = vscodeUrl;
               instance.app_url = appUrl;
+              instance.public_ip = taskInfo.publicIp || instance.public_ip;
             }
           }
         }
@@ -116,6 +201,8 @@ router.post('/stop-all', async (req, res) => {
       try {
         if (instance.task_arn) {
           await stopTask(instance.task_arn);
+          // Clean up CloudFront distribution
+          await cleanupCloudFront(instance);
           updateInstance(instance.id, { status: 'stopping' });
           results.push(instance.id);
         }
@@ -155,6 +242,8 @@ router.delete('/all', async (req, res) => {
             // Task might already be stopped
           }
         }
+        // Clean up CloudFront distribution
+        await cleanupCloudFront(instance);
         deleteInstance(instance.id);
         results.push(instance.id);
       } catch (err: any) {
@@ -222,6 +311,8 @@ router.post('/:id/stop', async (req, res) => {
     }
 
     await stopTask(instance.task_arn);
+    // Clean up CloudFront distribution
+    await cleanupCloudFront(instance);
     updateInstance(instance.id, { status: 'stopping' });
 
     res.json({ success: true, message: 'Stop signal sent' });
@@ -239,6 +330,9 @@ router.post('/:id/start', async (req, res) => {
       return res.status(404).json({ error: 'Instance not found' });
     }
 
+    // Clean up old CloudFront distribution if exists (IP will change)
+    await cleanupCloudFront(instance);
+
     // Start new ECS task
     const taskInfo = await runTask(instance.id);
 
@@ -247,6 +341,11 @@ router.post('/:id/start', async (req, res) => {
       status: taskInfo.status.toLowerCase(),
       vscode_url: null,
       app_url: null,
+      // Reset CloudFront fields since IP will change
+      cloudfront_distribution_id: undefined,
+      cloudfront_domain: undefined,
+      cloudfront_status: undefined,
+      public_ip: undefined,
     });
 
     res.json({ success: true, taskArn: taskInfo.taskArn });
@@ -272,6 +371,9 @@ router.delete('/:id', async (req, res) => {
         // Task might already be stopped
       }
     }
+
+    // Clean up CloudFront distribution
+    await cleanupCloudFront(instance);
 
     // Delete local record
     deleteInstance(instance.id);

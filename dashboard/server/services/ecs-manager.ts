@@ -23,6 +23,10 @@ import {
   CloudWatchLogsClient,
   DescribeLogGroupsCommand,
 } from '@aws-sdk/client-cloudwatch-logs';
+import {
+  CloudFrontClient,
+  ListDistributionsCommand,
+} from '@aws-sdk/client-cloudfront';
 import { getCredentials, getConfig, getAllConfig } from '../db/database.js';
 
 // Validates AWS credentials and checks permissions for ECS, ECR, EC2, IAM, CloudWatch Logs
@@ -102,6 +106,22 @@ function getCloudWatchLogsClient(): CloudWatchLogsClient {
 
   return new CloudWatchLogsClient({
     region: creds.region,
+    credentials: {
+      accessKeyId: creds.access_key_id,
+      secretAccessKey: creds.secret_access_key,
+    },
+  });
+}
+
+function getCloudFrontClient(): CloudFrontClient {
+  const creds = getCredentials();
+  if (!creds) {
+    throw new Error('AWS credentials not configured');
+  }
+
+  // CloudFront is a global service
+  return new CloudFrontClient({
+    region: 'us-east-1',
     credentials: {
       accessKeyId: creds.access_key_id,
       secretAccessKey: creds.secret_access_key,
@@ -404,6 +424,34 @@ export async function validateCredentials(): Promise<ValidateCredentialsResult> 
         permission: 'logs:DescribeLogGroups',
         status: 'error',
         message: err.message || 'Unknown error checking CloudWatch Logs',
+      });
+    }
+  }
+
+  // Check CloudFront permissions (needed for HTTPS access)
+  try {
+    const cfClient = getCloudFrontClient();
+    await cfClient.send(new ListDistributionsCommand({ MaxItems: 1 }));
+    permissions.push({
+      service: 'CloudFront',
+      permission: 'cloudfront:ListDistributions',
+      status: 'granted',
+      message: 'Can manage CloudFront distributions for HTTPS',
+    });
+  } catch (err: any) {
+    if (err.name === 'AccessDeniedException' || err.message?.includes('not authorized')) {
+      permissions.push({
+        service: 'CloudFront',
+        permission: 'cloudfront:ListDistributions',
+        status: 'denied',
+        message: 'Missing CloudFront permissions - need CloudFrontFullAccess policy for HTTPS',
+      });
+    } else {
+      permissions.push({
+        service: 'CloudFront',
+        permission: 'cloudfront:ListDistributions',
+        status: 'error',
+        message: err.message || 'Unknown error checking CloudFront',
       });
     }
   }

@@ -81,6 +81,11 @@ export interface Instance {
   participant_name?: string;
   participant_email?: string;
   notes?: string;
+  // CloudFront fields for HTTPS access
+  cloudfront_distribution_id?: string;
+  cloudfront_domain?: string;
+  cloudfront_status?: string;
+  public_ip?: string;
 }
 
 export function createInstance(id: string): Instance {

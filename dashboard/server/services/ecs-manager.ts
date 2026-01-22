@@ -319,7 +319,7 @@ export async function validateCredentials(): Promise<ValidateCredentialsResult> 
   // Check EC2 permissions (VPC/networking)
   try {
     const ec2Client = getEC2Client();
-    await ec2Client.send(new DescribeVpcsCommand({ MaxResults: 1 }));
+    await ec2Client.send(new DescribeVpcsCommand({ MaxResults: 5 }));
     permissions.push({
       service: 'EC2',
       permission: 'ec2:DescribeVpcs',

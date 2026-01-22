@@ -21,6 +21,8 @@ export default function CredentialsForm() {
       queryClient.invalidateQueries({ queryKey: ['credentials'] })
       setAccessKeyId('')
       setSecretAccessKey('')
+      // Auto-validate after saving
+      validateMutation.mutate()
     },
   })
 
@@ -194,6 +196,7 @@ export default function CredentialsForm() {
                     <li><code className="bg-gray-700 px-1 rounded">AmazonEC2ContainerRegistryFullAccess</code> - Push Docker images</li>
                     <li><code className="bg-gray-700 px-1 rounded">AmazonEC2ReadOnlyAccess</code> - Get public IPs</li>
                     <li><code className="bg-gray-700 px-1 rounded">CloudWatchLogsFullAccess</code> - View container logs</li>
+                    <li><code className="bg-gray-700 px-1 rounded">CloudFrontFullAccess</code> - HTTPS for instances</li>
                   </ul>
                   <p className="mt-2 text-gray-500 text-xs font-medium">
                     Optional (only for automated setup):

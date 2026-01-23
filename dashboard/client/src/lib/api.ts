@@ -69,12 +69,12 @@ export const api = {
   // Instances
   getInstances: () => fetchJson<Instance[]>('/instances'),
 
-  spinUpInstances: (count: number) =>
+  spinUpInstances: ({ count, extension }: { count: number; extension: string }) =>
     fetchJson<{ success: boolean; instances: Instance[]; errors?: string[] }>(
       '/instances/spin-up',
       {
         method: 'POST',
-        body: JSON.stringify({ count }),
+        body: JSON.stringify({ count, extension }),
       }
     ),
 
@@ -143,7 +143,7 @@ export const api = {
 
   // Setup
   getSetupStatus: () =>
-    fetchJson<{ configured: boolean; missing: string[]; ecrImageExists: boolean; imageUri: string | null }>('/setup/status'),
+    fetchJson<{ configured: boolean; missing: string[]; ecrImageExists: boolean; imageUri: string | null; availableImages?: ('continue' | 'cline' | 'roo-code')[] }>('/setup/status'),
 
   runSetup: () =>
     fetchJson<{

@@ -371,17 +371,19 @@ export async function checkSetupStatus(): Promise<{
   missing: string[];
   ecrImageExists: boolean;
   imageUri: string | null;
+  availableImages: AIExtension[];
 }> {
   const missing: string[] = [];
   let ecrImageExists = false;
   let imageUri: string | null = null;
+  const availableImages: AIExtension[] = [];
 
   try {
     const clients = getClients();
     const creds = getCredentials();
 
     if (!creds) {
-      return { configured: false, missing: ['AWS credentials'], ecrImageExists: false, imageUri: null };
+      return { configured: false, missing: ['AWS credentials'], ecrImageExists: false, imageUri: null, availableImages: [] };
     }
 
     // Get account ID for image URI
@@ -408,29 +410,54 @@ export async function checkSetupStatus(): Promise<{
       missing.push('ECS cluster');
     }
 
-    // Check ECR repo
+    // Check ECR repo and available images
     try {
       const repo = await clients.ecr.send(new DescribeRepositoriesCommand({
         repositoryNames: ['vibe-coding-lab'],
       }));
       if (repo.repositories && repo.repositories.length > 0) {
-        // Check if image exists
+        const { ECRClient, DescribeImagesCommand, ListImagesCommand } = await import('@aws-sdk/client-ecr');
+        const ecr = new ECRClient({
+          region: creds.region,
+          credentials: {
+            accessKeyId: creds.access_key_id,
+            secretAccessKey: creds.secret_access_key,
+          },
+        });
+
+        // Check for each extension image
+        for (const ext of AI_EXTENSIONS) {
+          try {
+            const images = await ecr.send(new DescribeImagesCommand({
+              repositoryName: 'vibe-coding-lab',
+              imageIds: [{ imageTag: ext }],
+            }));
+            if ((images.imageDetails?.length || 0) > 0) {
+              availableImages.push(ext);
+            }
+          } catch {
+            // Image tag doesn't exist
+          }
+        }
+
+        // Also check for 'latest' tag for backwards compatibility
         try {
-          const { ECRClient, DescribeImagesCommand } = await import('@aws-sdk/client-ecr');
-          const ecr = new ECRClient({
-            region: creds.region,
-            credentials: {
-              accessKeyId: creds.access_key_id,
-              secretAccessKey: creds.secret_access_key,
-            },
-          });
           const images = await ecr.send(new DescribeImagesCommand({
             repositoryName: 'vibe-coding-lab',
             imageIds: [{ imageTag: 'latest' }],
           }));
           ecrImageExists = (images.imageDetails?.length || 0) > 0;
+          // If only 'latest' exists and no extension-specific tags, assume it's 'continue'
+          if (ecrImageExists && availableImages.length === 0) {
+            availableImages.push('continue');
+          }
         } catch {
           ecrImageExists = false;
+        }
+
+        // If we have any extension images, mark as existing
+        if (availableImages.length > 0) {
+          ecrImageExists = true;
         }
       } else {
         missing.push('ECR repository');
@@ -469,6 +496,7 @@ export async function checkSetupStatus(): Promise<{
       missing,
       ecrImageExists,
       imageUri,
+      availableImages,
     };
   } catch (err: any) {
     return {
@@ -476,6 +504,7 @@ export async function checkSetupStatus(): Promise<{
       missing: ['Unable to check: ' + err.message],
       ecrImageExists: false,
       imageUri: null,
+      availableImages: [],
     };
   }
 }
@@ -536,8 +565,13 @@ export async function checkDockerAvailable(): Promise<{ available: boolean; mess
   }
 }
 
+// Available AI extensions
+export const AI_EXTENSIONS = ['continue', 'cline', 'roo-code'] as const;
+export type AIExtension = typeof AI_EXTENSIONS[number];
+
 export async function buildAndPushImage(
-  onProgress?: (result: DockerBuildResult) => void
+  onProgress?: (result: DockerBuildResult) => void,
+  extensions?: AIExtension[] // If not provided, builds selected extension. Pass ['continue', 'cline', 'roo-code'] for all
 ): Promise<{ success: boolean; steps: DockerBuildResult[]; error?: string }> {
   const steps: DockerBuildResult[] = [];
   const report = (result: DockerBuildResult) => {
@@ -592,28 +626,43 @@ export async function buildAndPushImage(
     await execAsync(loginCmd);
     report({ success: true, step: 'docker_login', message: 'Logged into ECR' });
 
-    // Get selected AI extension from config
-    const aiExtension = getConfig('ai_extension') || 'continue';
-    report({ success: true, step: 'get_extension', message: `Selected AI extension: ${aiExtension}` });
-
-    // Build Docker image (--no-cache ensures fresh build with latest changes)
-    report({ success: true, step: 'docker_build', message: `Building Docker image with ${aiExtension} extension (this may take several minutes)...` });
+    // Determine which extensions to build
+    const extensionsToBuild = extensions || [getConfig('ai_extension') as AIExtension || 'continue'];
     const dockerfilePath = path.resolve(__dirname, '../../../cline-setup');
-    const buildCmd = `docker build --no-cache --build-arg AI_EXTENSION=${aiExtension} -t vibe-coding-lab:latest "${dockerfilePath}"`;
-    await execAsync(buildCmd, { maxBuffer: 50 * 1024 * 1024, timeout: 600000 }); // 50MB buffer, 10min timeout
-    report({ success: true, step: 'docker_build', message: `Docker image built successfully with ${aiExtension}` });
 
-    // Tag image
-    report({ success: true, step: 'docker_tag', message: 'Tagging image for ECR...' });
-    const tagCmd = `docker tag vibe-coding-lab:latest ${ecrRepo}:latest`;
-    await execAsync(tagCmd);
-    report({ success: true, step: 'docker_tag', message: `Tagged as ${ecrRepo}:latest` });
+    report({ success: true, step: 'get_extension', message: `Building extensions: ${extensionsToBuild.join(', ')}` });
 
-    // Push image
-    report({ success: true, step: 'docker_push', message: 'Pushing image to ECR (this may take a few minutes)...' });
-    const pushCmd = `docker push ${ecrRepo}:latest`;
-    await execAsync(pushCmd, { maxBuffer: 50 * 1024 * 1024 });
-    report({ success: true, step: 'docker_push', message: 'Image pushed to ECR successfully' });
+    // Build, tag, and push each extension
+    for (const ext of extensionsToBuild) {
+      const extTag = ext; // Tag will be :continue, :cline, or :roo-code
+
+      // Build Docker image
+      report({ success: true, step: `docker_build_${ext}`, message: `Building ${ext} image (this may take several minutes)...` });
+      const buildCmd = `docker build --no-cache --build-arg AI_EXTENSION=${ext} -t vibe-coding-lab:${extTag} "${dockerfilePath}"`;
+      await execAsync(buildCmd, { maxBuffer: 50 * 1024 * 1024, timeout: 600000 }); // 50MB buffer, 10min timeout
+      report({ success: true, step: `docker_build_${ext}`, message: `Docker image built successfully: ${ext}` });
+
+      // Tag image for ECR
+      report({ success: true, step: `docker_tag_${ext}`, message: `Tagging ${ext} image for ECR...` });
+      const tagCmd = `docker tag vibe-coding-lab:${extTag} ${ecrRepo}:${extTag}`;
+      await execAsync(tagCmd);
+      report({ success: true, step: `docker_tag_${ext}`, message: `Tagged as ${ecrRepo}:${extTag}` });
+
+      // Push image
+      report({ success: true, step: `docker_push_${ext}`, message: `Pushing ${ext} image to ECR...` });
+      const pushCmd = `docker push ${ecrRepo}:${extTag}`;
+      await execAsync(pushCmd, { maxBuffer: 50 * 1024 * 1024 });
+      report({ success: true, step: `docker_push_${ext}`, message: `Image ${ext} pushed to ECR successfully` });
+    }
+
+    // Also tag the first extension as :latest for backwards compatibility
+    if (extensionsToBuild.length > 0) {
+      const firstExt = extensionsToBuild[0];
+      report({ success: true, step: 'docker_tag_latest', message: 'Tagging latest...' });
+      await execAsync(`docker tag vibe-coding-lab:${firstExt} ${ecrRepo}:latest`);
+      await execAsync(`docker push ${ecrRepo}:latest`, { maxBuffer: 50 * 1024 * 1024 });
+      report({ success: true, step: 'docker_tag_latest', message: `Tagged ${firstExt} as :latest` });
+    }
 
     return { success: true, steps };
   } catch (err: any) {

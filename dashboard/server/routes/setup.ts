@@ -81,6 +81,7 @@ router.post('/build-and-push', async (req, res) => {
 });
 
 // Build and push Docker image with SSE streaming progress
+// Query params: ?extensions=continue,cline,roo-code (comma-separated, or 'all' for all three)
 router.get('/build-and-push-stream', async (req, res) => {
   // Set up SSE headers
   res.setHeader('Content-Type', 'text/event-stream');
@@ -93,9 +94,21 @@ router.get('/build-and-push-stream', async (req, res) => {
   };
 
   try {
+    // Parse extensions from query param
+    const extensionsParam = req.query.extensions as string | undefined;
+    let extensions: ('continue' | 'cline' | 'roo-code')[] | undefined;
+
+    if (extensionsParam === 'all') {
+      extensions = ['continue', 'cline', 'roo-code'];
+    } else if (extensionsParam) {
+      extensions = extensionsParam.split(',').filter(e =>
+        ['continue', 'cline', 'roo-code'].includes(e)
+      ) as ('continue' | 'cline' | 'roo-code')[];
+    }
+
     const result = await buildAndPushImage((progress) => {
       sendEvent({ type: 'progress', ...progress });
-    });
+    }, extensions);
 
     sendEvent({ type: 'complete', success: result.success, steps: result.steps, error: result.error });
   } catch (err: any) {

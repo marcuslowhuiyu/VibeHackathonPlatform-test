@@ -129,7 +129,24 @@ function getCloudFrontClient(): CloudFrontClient {
   });
 }
 
-export async function runTask(instanceId: string): Promise<TaskInfo> {
+import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
+
+function getSTSClient(): STSClient {
+  const creds = getCredentials();
+  if (!creds) {
+    throw new Error('AWS credentials not configured');
+  }
+
+  return new STSClient({
+    region: creds.region,
+    credentials: {
+      accessKeyId: creds.access_key_id,
+      secretAccessKey: creds.secret_access_key,
+    },
+  });
+}
+
+export async function runTask(instanceId: string, extension: string = 'continue'): Promise<TaskInfo> {
   const client = getECSClient();
   const creds = getCredentials();
   const config = getAllConfig();
@@ -151,6 +168,14 @@ export async function runTask(instanceId: string): Promise<TaskInfo> {
     throw new Error('Security group ID not configured. Please set up AWS config first.');
   }
 
+  // Get AWS account ID to construct ECR image URI
+  const stsClient = getSTSClient();
+  const identity = await stsClient.send(new GetCallerIdentityCommand({}));
+  const accountId = identity.Account;
+
+  // Construct image URI with extension tag
+  const imageUri = `${accountId}.dkr.ecr.${creds.region}.amazonaws.com/vibe-coding-lab:${extension}`;
+
   const response = await client.send(
     new RunTaskCommand({
       cluster: clusterName,
@@ -167,6 +192,8 @@ export async function runTask(instanceId: string): Promise<TaskInfo> {
         containerOverrides: [
           {
             name: 'vibe-container',
+            // Override the image to use the extension-specific tag
+            image: imageUri,
             environment: [
               { name: 'INSTANCE_ID', value: instanceId },
               // Pass AWS credentials for AI extension/Bedrock access
@@ -174,7 +201,7 @@ export async function runTask(instanceId: string): Promise<TaskInfo> {
               { name: 'AWS_SECRET_ACCESS_KEY', value: creds.secret_access_key },
               { name: 'AWS_REGION', value: creds.region },
               // Pass selected AI extension (continue, cline, or roo-code)
-              { name: 'AI_EXTENSION', value: config.ai_extension || 'continue' },
+              { name: 'AI_EXTENSION', value: extension },
             ],
           },
         ],

@@ -141,25 +141,34 @@ router.get('/', async (req, res) => {
 // Spin up new instances
 router.post('/spin-up', async (req, res) => {
   try {
-    const { count = 1 } = req.body;
+    const { count = 1, extension = 'continue' } = req.body;
 
     if (count < 1 || count > 100) {
       return res.status(400).json({ error: 'Count must be between 1 and 100' });
     }
+
+    // Validate extension
+    const validExtensions = ['continue', 'cline', 'roo-code'];
+    if (!validExtensions.includes(extension)) {
+      return res.status(400).json({ error: `Invalid extension. Must be one of: ${validExtensions.join(', ')}` });
+    }
+
+    // Use extension abbreviation for instance ID
+    const extPrefix = extension === 'continue' ? 'ct' : extension === 'cline' ? 'cl' : 'rc';
 
     const results: Instance[] = [];
     const errors: string[] = [];
 
     // Spin up instances in parallel for faster provisioning
     const promises = Array.from({ length: count }, async (_, i) => {
-      const instanceId = `vibe-${nanoid(8)}`;
+      const instanceId = `vibe-${extPrefix}-${nanoid(5)}`;
 
       try {
         // Create local record
         const instance = createInstance(instanceId);
 
-        // Start ECS task
-        const taskInfo = await runTask(instanceId);
+        // Start ECS task with specific extension image
+        const taskInfo = await runTask(instanceId, extension);
 
         // Update with task ARN
         updateInstance(instanceId, {

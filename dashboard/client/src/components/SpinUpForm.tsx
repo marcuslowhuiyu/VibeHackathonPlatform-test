@@ -1,29 +1,42 @@
 import { useState } from 'react'
-import { Plus, Loader2, Minus, AlertTriangle, CheckCircle, Package } from 'lucide-react'
+import { Plus, Loader2, Minus, AlertTriangle, CheckCircle, Package, Bot } from 'lucide-react'
+
+type AIExtension = 'continue' | 'cline' | 'roo-code'
 
 interface SetupStatus {
   configured: boolean
   missing: string[]
   ecrImageExists: boolean
   imageUri: string | null
+  availableImages?: AIExtension[]
 }
 
 interface SpinUpFormProps {
-  onSpinUp: (count: number) => void
+  onSpinUp: (count: number, extension: AIExtension) => void
   isLoading: boolean
   setupStatus?: SetupStatus
   onGoToSetup: () => void
 }
 
+const EXTENSION_LABELS: Record<AIExtension, { name: string; description: string }> = {
+  continue: { name: 'Continue', description: 'File-based config, reliable' },
+  cline: { name: 'Cline', description: 'Autonomous AI agent' },
+  'roo-code': { name: 'Roo Code', description: 'Enhanced Cline fork' },
+}
+
 export default function SpinUpForm({ onSpinUp, isLoading, setupStatus, onGoToSetup }: SpinUpFormProps) {
   const [count, setCount] = useState(1)
+  const [selectedExtension, setSelectedExtension] = useState<AIExtension>('continue')
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (count >= 1 && count <= 100) {
-      onSpinUp(count)
+      onSpinUp(count, selectedExtension)
     }
   }
+
+  // Available images from ECR (or default to continue if not specified)
+  const availableImages = setupStatus?.availableImages || ['continue']
 
   const handleCountChange = (value: string) => {
     const num = parseInt(value, 10)
@@ -107,7 +120,40 @@ export default function SpinUpForm({ onSpinUp, isLoading, setupStatus, onGoToSet
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-4">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Extension Selection */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-2 flex items-center gap-2">
+            <Bot className="w-4 h-4" />
+            AI Extension
+          </label>
+          <div className="flex gap-2 flex-wrap">
+            {(Object.keys(EXTENSION_LABELS) as AIExtension[]).map((ext) => {
+              const isAvailable = availableImages.includes(ext)
+              return (
+                <button
+                  key={ext}
+                  type="button"
+                  onClick={() => isAvailable && setSelectedExtension(ext)}
+                  disabled={!isAvailable}
+                  className={`px-4 py-2 rounded-lg text-sm transition-all ${
+                    selectedExtension === ext
+                      ? 'bg-blue-600 text-white border-2 border-blue-400'
+                      : isAvailable
+                      ? 'bg-gray-700 text-gray-300 hover:bg-gray-600 border-2 border-transparent'
+                      : 'bg-gray-800 text-gray-500 cursor-not-allowed border-2 border-transparent opacity-50'
+                  }`}
+                  title={!isAvailable ? 'Image not built - go to Setup to build' : EXTENSION_LABELS[ext].description}
+                >
+                  {EXTENSION_LABELS[ext].name}
+                  {!isAvailable && ' (not built)'}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-4">
         <div className="flex-1 min-w-[280px]">
           <label className="block text-sm font-medium text-gray-300 mb-2">
             Number of Instances (1-100)
@@ -192,10 +238,11 @@ export default function SpinUpForm({ onSpinUp, isLoading, setupStatus, onGoToSet
           ) : (
             <>
               <Plus className="w-5 h-5" />
-              Spin Up {count} Instance{count > 1 ? 's' : ''}
+              Spin Up {count} {EXTENSION_LABELS[selectedExtension].name} Instance{count > 1 ? 's' : ''}
             </>
           )}
         </button>
+        </div>
       </form>
 
       <div className="flex items-center justify-between mt-4 text-sm">

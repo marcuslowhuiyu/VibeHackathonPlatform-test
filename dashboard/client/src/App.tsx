@@ -33,7 +33,8 @@ function App() {
   })
 
   const spinUpMutation = useMutation({
-    mutationFn: api.spinUpInstances,
+    mutationFn: ({ count, extension }: { count: number; extension: string }) =>
+      api.spinUpInstances({ count, extension }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['instances'] })
     },
@@ -144,7 +145,7 @@ function App() {
               <>
                 {/* Spin Up Form */}
                 <SpinUpForm
-                  onSpinUp={(count) => spinUpMutation.mutate(count)}
+                  onSpinUp={(count, extension) => spinUpMutation.mutate({ count, extension })}
                   isLoading={spinUpMutation.isPending}
                   setupStatus={setupStatus}
                   onGoToSetup={() => setActiveTab('setup')}

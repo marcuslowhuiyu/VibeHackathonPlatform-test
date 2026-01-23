@@ -568,6 +568,14 @@ function FileEditor() {
   )
 }
 
+type AIExtension = 'continue' | 'cline' | 'roo-code'
+
+const EXTENSION_INFO: Record<AIExtension, { name: string; description: string }> = {
+  continue: { name: 'Continue', description: 'File-based config, most reliable' },
+  cline: { name: 'Cline', description: 'Autonomous AI agent' },
+  'roo-code': { name: 'Roo Code', description: 'Enhanced Cline fork' },
+}
+
 export default function SetupGuide() {
   const queryClient = useQueryClient()
   const [setupSteps, setSetupSteps] = useState<SetupStep[]>([])
@@ -576,6 +584,7 @@ export default function SetupGuide() {
   const [copiedDocker, setCopiedDocker] = useState(false)
   const [isBuilding, setIsBuilding] = useState(false)
   const [buildError, setBuildError] = useState<string | null>(null)
+  const [selectedExtensions, setSelectedExtensions] = useState<AIExtension[]>(['continue'])
 
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['setup-status'],
@@ -604,13 +613,30 @@ export default function SetupGuide() {
     },
   })
 
+  // Toggle extension selection
+  const toggleExtension = (ext: AIExtension) => {
+    setSelectedExtensions((prev) => {
+      if (prev.includes(ext)) {
+        // Don't allow deselecting if it's the only one
+        if (prev.length === 1) return prev
+        return prev.filter((e) => e !== ext)
+      }
+      return [...prev, ext]
+    })
+  }
+
+  const selectAllExtensions = () => {
+    setSelectedExtensions(['continue', 'cline', 'roo-code'])
+  }
+
   // SSE-based build for real-time progress
   const startBuild = () => {
     setIsBuilding(true)
     setBuildError(null)
     setDockerSteps([])
 
-    const eventSource = new EventSource('/api/setup/build-and-push-stream')
+    const extensionsParam = selectedExtensions.join(',')
+    const eventSource = new EventSource(`/api/setup/build-and-push-stream?extensions=${extensionsParam}`)
 
     eventSource.onmessage = (event) => {
       try {
@@ -900,24 +926,67 @@ export default function SetupGuide() {
           )}
 
           <p className="text-gray-400">
-            Build the Docker image and push it to ECR. This requires Docker to be installed and
-            running.
+            Build Docker images for each AI extension. Select which extensions to build, then push to ECR.
           </p>
+
+          {/* Extension Selection */}
+          <div className="bg-gray-700/30 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-medium text-gray-300">Select Extensions to Build:</span>
+              <button
+                onClick={selectAllExtensions}
+                disabled={isBuilding}
+                className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
+              >
+                Select All
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              {(Object.keys(EXTENSION_INFO) as AIExtension[]).map((ext) => (
+                <button
+                  key={ext}
+                  onClick={() => toggleExtension(ext)}
+                  disabled={isBuilding}
+                  className={`p-3 rounded-lg border text-left transition-all ${
+                    selectedExtensions.includes(ext)
+                      ? 'border-blue-500 bg-blue-900/30'
+                      : 'border-gray-600 bg-gray-800/50 hover:border-gray-500'
+                  } ${isBuilding ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`w-4 h-4 rounded border flex items-center justify-center ${
+                        selectedExtensions.includes(ext)
+                          ? 'bg-blue-500 border-blue-500'
+                          : 'border-gray-500'
+                      }`}
+                    >
+                      {selectedExtensions.includes(ext) && (
+                        <Check className="w-3 h-3 text-white" />
+                      )}
+                    </div>
+                    <span className="font-medium text-sm">{EXTENSION_INFO[ext].name}</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1 ml-6">{EXTENSION_INFO[ext].description}</p>
+                </button>
+              ))}
+            </div>
+          </div>
 
           <button
             onClick={startBuild}
-            disabled={isBuilding || !dockerStatus?.available}
+            disabled={isBuilding || !dockerStatus?.available || selectedExtensions.length === 0}
             className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 rounded-lg flex items-center gap-2 font-medium"
           >
             {isBuilding ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" />
-                Building & Pushing...
+                Building {selectedExtensions.length} image{selectedExtensions.length > 1 ? 's' : ''}...
               </>
             ) : (
               <>
                 <Play className="w-5 h-5" />
-                Build & Push Image
+                Build & Push {selectedExtensions.length} Image{selectedExtensions.length > 1 ? 's' : ''}
               </>
             )}
           </button>
@@ -925,26 +994,9 @@ export default function SetupGuide() {
           {/* Real-time Progress Bar */}
           {(isBuilding || dockerSteps.length > 0) && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-300 font-medium">Build Progress</span>
-                <span className="text-gray-400">
-                  {dockerSteps.filter((s) => s.success && s.step !== 'error').length} / 8 steps
-                </span>
-              </div>
-
-              {/* Progress Bar */}
-              <div className="w-full bg-gray-700 rounded-full h-3 overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-500 ease-out"
-                  style={{
-                    width: `${Math.min(100, (dockerSteps.filter((s) => s.success && s.step !== 'error').length / 8) * 100)}%`,
-                  }}
-                />
-              </div>
-
               {/* Current Step */}
               {isBuilding && dockerSteps.length > 0 && (
-                <div className="flex items-center gap-2 text-sm text-blue-400">
+                <div className="flex items-center gap-2 text-sm text-blue-400 bg-blue-900/20 p-3 rounded-lg">
                   <Loader2 className="w-4 h-4 animate-spin" />
                   {dockerSteps[dockerSteps.length - 1]?.message}
                 </div>

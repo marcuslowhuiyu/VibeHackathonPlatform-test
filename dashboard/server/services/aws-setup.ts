@@ -36,7 +36,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getCredentials, setConfig } from '../db/database.js';
+import { getCredentials, setConfig, getConfig } from '../db/database.js';
 
 const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
@@ -592,12 +592,16 @@ export async function buildAndPushImage(
     await execAsync(loginCmd);
     report({ success: true, step: 'docker_login', message: 'Logged into ECR' });
 
+    // Get selected AI extension from config
+    const aiExtension = getConfig('ai_extension') || 'continue';
+    report({ success: true, step: 'get_extension', message: `Selected AI extension: ${aiExtension}` });
+
     // Build Docker image (--no-cache ensures fresh build with latest changes)
-    report({ success: true, step: 'docker_build', message: 'Building Docker image with --no-cache (this may take several minutes)...' });
+    report({ success: true, step: 'docker_build', message: `Building Docker image with ${aiExtension} extension (this may take several minutes)...` });
     const dockerfilePath = path.resolve(__dirname, '../../../cline-setup');
-    const buildCmd = `docker build --no-cache -t vibe-coding-lab:latest "${dockerfilePath}"`;
+    const buildCmd = `docker build --no-cache --build-arg AI_EXTENSION=${aiExtension} -t vibe-coding-lab:latest "${dockerfilePath}"`;
     await execAsync(buildCmd, { maxBuffer: 50 * 1024 * 1024, timeout: 600000 }); // 50MB buffer, 10min timeout
-    report({ success: true, step: 'docker_build', message: 'Docker image built successfully' });
+    report({ success: true, step: 'docker_build', message: `Docker image built successfully with ${aiExtension}` });
 
     // Tag image
     report({ success: true, step: 'docker_tag', message: 'Tagging image for ECR...' });

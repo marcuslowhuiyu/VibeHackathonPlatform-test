@@ -265,6 +265,7 @@ interface DockerStep {
 const DOCKER_STEP_LABELS: Record<string, string> = {
   check_docker: 'Check Docker',
   get_account: 'Get AWS Account',
+  get_extension: 'Get AI Extension',
   ecr_auth: 'ECR Authentication',
   docker_login: 'Docker Login',
   docker_build: 'Build Image',
@@ -927,7 +928,7 @@ export default function SetupGuide() {
               <div className="flex items-center justify-between text-sm">
                 <span className="text-gray-300 font-medium">Build Progress</span>
                 <span className="text-gray-400">
-                  {dockerSteps.filter((s) => s.success && s.step !== 'error').length} / 7 steps
+                  {dockerSteps.filter((s) => s.success && s.step !== 'error').length} / 8 steps
                 </span>
               </div>
 
@@ -936,7 +937,7 @@ export default function SetupGuide() {
                 <div
                   className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-500 ease-out"
                   style={{
-                    width: `${Math.min(100, (dockerSteps.filter((s) => s.success && s.step !== 'error').length / 7) * 100)}%`,
+                    width: `${Math.min(100, (dockerSteps.filter((s) => s.success && s.step !== 'error').length / 8) * 100)}%`,
                   }}
                 />
               </div>

@@ -90,15 +90,19 @@ function App() {
         </div>
       </header>
 
-      {/* Main Content */}
+      {/* Main Content - Keep all tabs mounted to preserve state */}
       <main className="max-w-7xl mx-auto px-4 py-8">
-        {activeTab === 'settings' ? (
+        {/* Settings Tab */}
+        <div className={activeTab === 'settings' ? '' : 'hidden'}>
           <div className="space-y-8">
             <CredentialsForm />
             <ConfigForm />
           </div>
-        ) : activeTab === 'setup' ? (
-          !isConfigured ? (
+        </div>
+
+        {/* Setup Tab */}
+        <div className={activeTab === 'setup' ? '' : 'hidden'}>
+          {!isConfigured ? (
             <div className="bg-yellow-900/50 border border-yellow-600 rounded-lg p-6 text-center">
               <h2 className="text-xl font-semibold text-yellow-200 mb-2">
                 AWS Credentials Required
@@ -115,8 +119,11 @@ function App() {
             </div>
           ) : (
             <SetupGuide />
-          )
-        ) : (
+          )}
+        </div>
+
+        {/* Instances Tab */}
+        <div className={activeTab === 'instances' ? '' : 'hidden'}>
           <div className="space-y-6">
             {!isConfigured ? (
               <div className="bg-yellow-900/50 border border-yellow-600 rounded-lg p-6 text-center">
@@ -172,7 +179,7 @@ function App() {
               </>
             )}
           </div>
-        )}
+        </div>
       </main>
     </div>
   )

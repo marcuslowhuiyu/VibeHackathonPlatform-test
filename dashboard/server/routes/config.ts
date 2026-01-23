@@ -19,6 +19,7 @@ router.put('/', (req, res) => {
     'security_group_id',
     'alb_arn',
     'listener_arn',
+    'ai_extension',
   ];
 
   const updates: Record<string, string> = {};

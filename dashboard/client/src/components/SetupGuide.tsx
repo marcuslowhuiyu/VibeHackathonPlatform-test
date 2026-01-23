@@ -24,6 +24,7 @@ import {
   Info,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import ExtensionSelector from './ExtensionSelector'
 
 interface SetupStep {
   step: string
@@ -820,6 +821,17 @@ export default function SetupGuide() {
             </div>
           </div>
         </div>
+      </CollapsibleSection>
+
+      {/* AI Extension Selection */}
+      <CollapsibleSection
+        title="AI Coding Extension"
+        icon={<Server className="w-5 h-5 text-green-400" />}
+        defaultOpen={true}
+        badge="Choose"
+        badgeColor="blue"
+      >
+        <ExtensionSelector />
       </CollapsibleSection>
 
       {/* Step 1: AWS Setup */}

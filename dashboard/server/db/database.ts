@@ -34,6 +34,7 @@ function loadDb(): Database {
       security_group_id: '',
       alb_arn: '',
       listener_arn: '',
+      ai_extension: 'continue',
     },
   };
 }
@@ -61,6 +62,7 @@ export function initDatabase(): void {
         security_group_id: '',
         alb_arn: '',
         listener_arn: '',
+        ai_extension: 'continue',
       },
     };
     saveDb(initialDb);

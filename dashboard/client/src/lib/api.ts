@@ -45,6 +45,7 @@ export interface Config {
   security_group_id: string
   alb_arn: string
   listener_arn: string
+  ai_extension?: string
 }
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
@@ -147,7 +148,7 @@ export const api = {
   runSetup: () =>
     fetchJson<{
       success: boolean;
-      steps: { step: string; status: string; message?: string; resourceId?: string }[];
+      steps: { step: string; status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped'; message?: string; resourceId?: string }[];
       config?: Config;
       error?: string;
     }>('/setup/run', { method: 'POST' }),

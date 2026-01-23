@@ -169,10 +169,12 @@ export async function runTask(instanceId: string): Promise<TaskInfo> {
             name: 'vibe-container',
             environment: [
               { name: 'INSTANCE_ID', value: instanceId },
-              // Pass AWS credentials for Cline/Bedrock access
+              // Pass AWS credentials for AI extension/Bedrock access
               { name: 'AWS_ACCESS_KEY_ID', value: creds.access_key_id },
               { name: 'AWS_SECRET_ACCESS_KEY', value: creds.secret_access_key },
               { name: 'AWS_REGION', value: creds.region },
+              // Pass selected AI extension (continue, cline, or roo-code)
+              { name: 'AI_EXTENSION', value: config.ai_extension || 'continue' },
             ],
           },
         ],

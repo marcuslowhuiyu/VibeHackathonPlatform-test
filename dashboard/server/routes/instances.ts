@@ -20,6 +20,8 @@ const router = Router();
 
 // Helper to create CloudFront distribution for an instance
 async function ensureCloudFrontDistribution(instance: Instance, publicIp: string): Promise<void> {
+  console.log(`[CloudFront] Checking instance ${instance.id}: publicIp=${publicIp}, existing_cf=${instance.cloudfront_distribution_id}`);
+
   // Skip if already has CloudFront or no public IP
   if (!publicIp || instance.cloudfront_distribution_id) {
     // If we have a distribution, check its status
@@ -58,7 +60,8 @@ async function ensureCloudFrontDistribution(instance: Instance, publicIp: string
 
     console.log(`CloudFront distribution created: ${distribution.domainName}`);
   } catch (err: any) {
-    console.error(`Error creating CloudFront distribution for ${instance.id}:`, err);
+    console.error(`ERROR creating CloudFront distribution for ${instance.id}:`, err.message);
+    console.error(`Full error:`, JSON.stringify(err, null, 2));
     // Don't fail the whole request, just log the error
     // The instance will still work with direct IP access
   }
@@ -96,16 +99,17 @@ router.get('/', async (req, res) => {
               await ensureCloudFrontDistribution(instance, taskInfo.publicIp);
             }
 
-            // Use CloudFront URLs (HTTPS) if available and deployed, otherwise fall back to direct IP
+            // Use CloudFront URLs (HTTPS) if available - works even while status is "InProgress"
+            // CloudFront distributions are usable within 1-2 minutes of creation, no need to wait for "Deployed"
             let vscodeUrl: string | null = null;
             let appUrl: string | null = null;
 
-            if (instance.cloudfront_domain && instance.cloudfront_status === 'Deployed') {
-              // CloudFront is ready - use HTTPS URLs
+            if (instance.cloudfront_domain) {
+              // CloudFront URL available - use HTTPS (works even during deployment)
               vscodeUrl = `https://${instance.cloudfront_domain}`;
               appUrl = `https://${instance.cloudfront_domain}:3000`; // Note: CloudFront only handles port 8080
             } else if (taskInfo.publicIp) {
-              // Fall back to direct IP while CloudFront is deploying
+              // Fall back to direct IP if CloudFront not yet created
               vscodeUrl = `http://${taskInfo.publicIp}:8080`;
               appUrl = `http://${taskInfo.publicIp}:3000`;
             }

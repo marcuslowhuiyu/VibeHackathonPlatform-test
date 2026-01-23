@@ -32,6 +32,15 @@ function getCloudFrontClient(): CloudFrontClient {
 }
 
 /**
+ * Convert IP address to nip.io domain name
+ * nip.io is a wildcard DNS service that maps IP addresses to domain names
+ * e.g., 18.215.165.84 becomes 18-215-165-84.nip.io
+ */
+function ipToNipDomain(ip: string): string {
+  return `${ip.replace(/\./g, '-')}.nip.io`;
+}
+
+/**
  * Create a CloudFront distribution for an ECS instance
  * This provides HTTPS access to the VS Code server and React app
  */
@@ -41,6 +50,11 @@ export async function createDistribution(
 ): Promise<CloudFrontDistribution> {
   const client = getCloudFrontClient();
   const callerReference = `vibe-${instanceId}-${Date.now()}`;
+
+  // CloudFront requires a domain name, not an IP address
+  // We use nip.io to convert IP to domain (e.g., 18.215.165.84 -> 18-215-165-84.nip.io)
+  const originDomain = ipToNipDomain(publicIp);
+  console.log(`[CloudFront] Converting IP ${publicIp} to domain: ${originDomain}`);
 
   const response = await client.send(
     new CreateDistributionCommand({
@@ -53,7 +67,7 @@ export async function createDistribution(
           Items: [
             {
               Id: `vibe-origin-${instanceId}`,
-              DomainName: publicIp,
+              DomainName: originDomain,
               CustomOriginConfig: {
                 HTTPPort: 8080,
                 HTTPSPort: 443,
@@ -108,7 +122,7 @@ export async function createDistribution(
     distributionId: distribution.Id!,
     domainName: distribution.DomainName!,
     status: distribution.Status!,
-    originDomain: publicIp,
+    originDomain: originDomain,
   };
 }
 
@@ -173,9 +187,9 @@ export async function updateDistributionOrigin(
 
   const config = distribution.DistributionConfig!;
 
-  // Update the origin domain
+  // Update the origin domain (convert IP to nip.io domain)
   if (config.Origins?.Items?.[0]) {
-    config.Origins.Items[0].DomainName = newPublicIp;
+    config.Origins.Items[0].DomainName = ipToNipDomain(newPublicIp);
   }
 
   await client.send(

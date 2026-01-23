@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Loader2, Minus, AlertTriangle, CheckCircle, Package, ExternalLink } from 'lucide-react'
+import { Plus, Loader2, Minus, AlertTriangle, CheckCircle, Package } from 'lucide-react'
 
 interface SetupStatus {
   configured: boolean

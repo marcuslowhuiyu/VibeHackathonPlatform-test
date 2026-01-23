@@ -164,4 +164,40 @@ router.put('/files/:filename', (req, res) => {
   }
 });
 
+// Test CloudFront creation (for debugging)
+router.post('/test-cloudfront', async (req, res) => {
+  try {
+    const { CloudFrontClient, ListDistributionsCommand } = await import('@aws-sdk/client-cloudfront');
+    const { getCredentials } = await import('../db/database.js');
+
+    const creds = getCredentials();
+    if (!creds) {
+      return res.status(400).json({ error: 'No credentials configured' });
+    }
+
+    const client = new CloudFrontClient({
+      region: 'us-east-1',
+      credentials: {
+        accessKeyId: creds.access_key_id,
+        secretAccessKey: creds.secret_access_key,
+      },
+    });
+
+    // Test basic CloudFront access
+    const result = await client.send(new ListDistributionsCommand({ MaxItems: 1 }));
+
+    res.json({
+      success: true,
+      message: 'CloudFront access OK',
+      distributionCount: result.DistributionList?.Items?.length || 0
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: err.message,
+      code: err.name,
+      details: err.$metadata || null
+    });
+  }
+});
+
 export default router;

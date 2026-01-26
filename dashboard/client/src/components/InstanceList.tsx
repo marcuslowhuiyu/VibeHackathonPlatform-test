@@ -28,6 +28,7 @@ import {
   Lock,
   Unlock,
   Globe,
+  Bot,
 } from 'lucide-react'
 import { api, Instance } from '../lib/api'
 
@@ -67,6 +68,28 @@ function getStatusIcon(status: string) {
     default:
       return <AlertCircle className="w-4 h-4 text-red-400" />
   }
+}
+
+// ==========================================
+// AI EXTENSION BADGE CONFIGURATION
+// Add new AI extensions here to scale support
+// ==========================================
+const EXTENSION_BADGES: Record<string, { label: string; color: string; bgColor: string }> = {
+  continue: { label: 'Continue', color: 'text-emerald-400', bgColor: 'bg-emerald-900/50 border-emerald-600' },
+  // To add new extensions, uncomment and configure:
+  // cline: { label: 'Cline', color: 'text-violet-400', bgColor: 'bg-violet-900/50 border-violet-600' },
+  // 'roo-code': { label: 'Roo Code', color: 'text-amber-400', bgColor: 'bg-amber-900/50 border-amber-600' },
+}
+
+function ExtensionBadge({ extension }: { extension?: string }) {
+  if (!extension) return null
+  const badge = EXTENSION_BADGES[extension] || { label: extension, color: 'text-gray-400', bgColor: 'bg-gray-700 border-gray-600' }
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded border ${badge.bgColor} ${badge.color}`}>
+      <Bot className="w-3 h-3" />
+      {badge.label}
+    </span>
+  )
 }
 
 // Parse Task ARN and generate AWS Console URL
@@ -268,9 +291,10 @@ export default function InstanceList({ instances }: InstanceListProps) {
   }
 
   const exportToCSV = () => {
-    const headers = ['Instance ID', 'Participant Name', 'Participant Email', 'Status', 'VS Code URL', 'React App URL', 'Notes', 'Created At']
+    const headers = ['Instance ID', 'AI Extension', 'Participant Name', 'Participant Email', 'Status', 'VS Code URL', 'React App URL', 'Notes', 'Created At']
     const rows = instances.map((i) => [
       i.id,
+      i.ai_extension || 'unknown',
       i.participant_name || '',
       i.participant_email || '',
       i.status,
@@ -414,7 +438,10 @@ export default function InstanceList({ instances }: InstanceListProps) {
                 <div className="flex items-center gap-3 min-w-[200px]">
                   {getStatusIcon(instance.status)}
                   <div>
-                    <p className="font-mono text-sm">{instance.id}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-mono text-sm">{instance.id}</p>
+                      <ExtensionBadge extension={instance.ai_extension} />
+                    </div>
                     <p className={`text-xs ${getStatusColor(instance.status)}`}>
                       {instance.status.toUpperCase()}
                     </p>
@@ -562,6 +589,13 @@ export default function InstanceList({ instances }: InstanceListProps) {
                     </h4>
 
                     <div className="space-y-2 text-sm">
+                      <div className="flex flex-col">
+                        <span className="text-gray-500 text-xs">AI Extension</span>
+                        <div className="mt-1">
+                          <ExtensionBadge extension={instance.ai_extension} />
+                        </div>
+                      </div>
+
                       <div className="flex flex-col">
                         <span className="text-gray-500 text-xs">Task ARN</span>
                         <span className="font-mono text-xs text-gray-300 break-all">

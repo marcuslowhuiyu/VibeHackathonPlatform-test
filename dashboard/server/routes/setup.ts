@@ -25,7 +25,7 @@ const EDITABLE_FILES: Record<string, { path: string; description: string; langua
   },
   'cline-config.json': {
     path: join(PROJECT_ROOT, 'cline-setup', 'cline-config.json'),
-    description: 'Cline AI assistant settings - model, instructions, auto-approval',
+    description: 'Continue AI assistant settings - model, instructions, auto-approval',
     language: 'json',
   },
 };
@@ -81,7 +81,7 @@ router.post('/build-and-push', async (req, res) => {
 });
 
 // Build and push Docker image with SSE streaming progress
-// Query params: ?extensions=continue,cline,roo-code (comma-separated, or 'all' for all three)
+// Only builds Continue extension
 router.get('/build-and-push-stream', async (req, res) => {
   // Set up SSE headers
   res.setHeader('Content-Type', 'text/event-stream');
@@ -94,17 +94,8 @@ router.get('/build-and-push-stream', async (req, res) => {
   };
 
   try {
-    // Parse extensions from query param
-    const extensionsParam = req.query.extensions as string | undefined;
-    let extensions: ('continue' | 'cline' | 'roo-code')[] | undefined;
-
-    if (extensionsParam === 'all') {
-      extensions = ['continue', 'cline', 'roo-code'];
-    } else if (extensionsParam) {
-      extensions = extensionsParam.split(',').filter(e =>
-        ['continue', 'cline', 'roo-code'].includes(e)
-      ) as ('continue' | 'cline' | 'roo-code')[];
-    }
+    // Only build Continue extension
+    const extensions: ('continue')[] = ['continue'];
 
     const result = await buildAndPushImage((progress) => {
       sendEvent({ type: 'progress', ...progress });

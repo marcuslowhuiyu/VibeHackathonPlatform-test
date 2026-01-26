@@ -567,12 +567,52 @@ function FileEditor() {
   )
 }
 
-type AIExtension = 'continue' | 'cline' | 'roo-code'
+// ==========================================
+// AI EXTENSION CONFIGURATION
+// Add new AI extensions here to scale support
+// ==========================================
+type AIExtension = 'continue'
+// To add more extensions, update the type:
+// type AIExtension = 'continue' | 'cline' | 'roo-code'
 
-const EXTENSION_INFO: Record<AIExtension, { name: string; description: string }> = {
-  continue: { name: 'Continue', description: 'File-based config, most reliable' },
-  cline: { name: 'Cline', description: 'Autonomous AI agent' },
-  'roo-code': { name: 'Roo Code', description: 'Enhanced Cline fork' },
+interface ExtensionConfig {
+  name: string
+  description: string
+  color: string
+  bgColor: string
+  enabled: boolean // Set to false to hide from UI but keep code ready
+}
+
+const AI_EXTENSIONS: Record<AIExtension, ExtensionConfig> = {
+  continue: {
+    name: 'Continue',
+    description: 'File-based config, most reliable for AWS Bedrock',
+    color: 'text-emerald-400',
+    bgColor: 'bg-emerald-900/30 border-emerald-600',
+    enabled: true,
+  },
+  // To add new extensions, uncomment and configure:
+  // cline: {
+  //   name: 'Cline',
+  //   description: 'Autonomous AI coding agent',
+  //   color: 'text-violet-400',
+  //   bgColor: 'bg-violet-900/30 border-violet-600',
+  //   enabled: false,
+  // },
+  // 'roo-code': {
+  //   name: 'Roo Code',
+  //   description: 'Enhanced Cline fork with additional features',
+  //   color: 'text-amber-400',
+  //   bgColor: 'bg-amber-900/30 border-amber-600',
+  //   enabled: false,
+  // },
+}
+
+// Get list of enabled extensions for UI
+const getEnabledExtensions = (): AIExtension[] => {
+  return (Object.keys(AI_EXTENSIONS) as AIExtension[]).filter(
+    (ext) => AI_EXTENSIONS[ext].enabled
+  )
 }
 
 export default function SetupGuide() {
@@ -584,6 +624,23 @@ export default function SetupGuide() {
   const [isBuilding, setIsBuilding] = useState(false)
   const [buildError, setBuildError] = useState<string | null>(null)
   const [selectedExtensions, setSelectedExtensions] = useState<AIExtension[]>(['continue'])
+
+  const enabledExtensions = getEnabledExtensions()
+
+  const toggleExtension = (ext: AIExtension) => {
+    setSelectedExtensions((prev) => {
+      if (prev.includes(ext)) {
+        // Don't allow deselecting the last one
+        if (prev.length === 1) return prev
+        return prev.filter((e) => e !== ext)
+      }
+      return [...prev, ext]
+    })
+  }
+
+  const selectAllExtensions = () => {
+    setSelectedExtensions([...enabledExtensions])
+  }
 
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['setup-status'],
@@ -611,22 +668,6 @@ export default function SetupGuide() {
       queryClient.invalidateQueries({ queryKey: ['config'] })
     },
   })
-
-  // Toggle extension selection
-  const toggleExtension = (ext: AIExtension) => {
-    setSelectedExtensions((prev) => {
-      if (prev.includes(ext)) {
-        // Don't allow deselecting if it's the only one
-        if (prev.length === 1) return prev
-        return prev.filter((e) => e !== ext)
-      }
-      return [...prev, ext]
-    })
-  }
-
-  const selectAllExtensions = () => {
-    setSelectedExtensions(['continue', 'cline', 'roo-code'])
-  }
 
   // SSE-based build for real-time progress
   const startBuild = () => {
@@ -914,51 +955,61 @@ export default function SetupGuide() {
           )}
 
           <p className="text-gray-400">
-            Build Docker images for each AI extension. Select which extensions to build, then push to ECR.
+            Build the Docker image for AI extension(s) and push to ECR.
           </p>
 
-          {/* Extension Selection */}
-          <div className="bg-gray-700/30 rounded-lg p-4">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-medium text-gray-300">Select Extensions to Build:</span>
-              <button
-                onClick={selectAllExtensions}
-                disabled={isBuilding}
-                className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
-              >
-                Select All
-              </button>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              {(Object.keys(EXTENSION_INFO) as AIExtension[]).map((ext) => (
+          {/* Extension Selector */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-gray-300">Select AI Extension(s) to Build</label>
+              {enabledExtensions.length > 1 && (
                 <button
-                  key={ext}
-                  onClick={() => toggleExtension(ext)}
-                  disabled={isBuilding}
-                  className={`p-3 rounded-lg border text-left transition-all ${
-                    selectedExtensions.includes(ext)
-                      ? 'border-blue-500 bg-blue-900/30'
-                      : 'border-gray-600 bg-gray-800/50 hover:border-gray-500'
-                  } ${isBuilding ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  onClick={selectAllExtensions}
+                  className="text-xs text-blue-400 hover:text-blue-300"
                 >
-                  <div className="flex items-center gap-2">
-                    <div
-                      className={`w-4 h-4 rounded border flex items-center justify-center ${
-                        selectedExtensions.includes(ext)
-                          ? 'bg-blue-500 border-blue-500'
-                          : 'border-gray-500'
-                      }`}
-                    >
-                      {selectedExtensions.includes(ext) && (
-                        <Check className="w-3 h-3 text-white" />
-                      )}
-                    </div>
-                    <span className="font-medium text-sm">{EXTENSION_INFO[ext].name}</span>
-                  </div>
-                  <p className="text-xs text-gray-400 mt-1 ml-6">{EXTENSION_INFO[ext].description}</p>
+                  Select All
                 </button>
-              ))}
+              )}
             </div>
+            <div className="grid gap-2">
+              {enabledExtensions.map((ext) => {
+                const config = AI_EXTENSIONS[ext]
+                const isSelected = selectedExtensions.includes(ext)
+                return (
+                  <button
+                    key={ext}
+                    onClick={() => toggleExtension(ext)}
+                    disabled={isBuilding}
+                    className={`p-3 rounded-lg border text-left transition-all ${
+                      isSelected
+                        ? config.bgColor
+                        : 'bg-gray-700/30 border-gray-600 hover:border-gray-500'
+                    } ${isBuilding ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
+                          isSelected ? 'border-current bg-current/20' : 'border-gray-500'
+                        } ${config.color}`}
+                      >
+                        {isSelected && <Check className="w-3 h-3" />}
+                      </div>
+                      <div className="flex-1">
+                        <span className={`font-medium ${isSelected ? config.color : 'text-gray-300'}`}>
+                          {config.name}
+                        </span>
+                        <p className="text-xs text-gray-400 mt-0.5">{config.description}</p>
+                      </div>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            {enabledExtensions.length === 1 && (
+              <p className="text-xs text-gray-500 italic">
+                Additional AI extensions can be enabled in the code (AI_EXTENSIONS config)
+              </p>
+            )}
           </div>
 
           <button
@@ -969,12 +1020,12 @@ export default function SetupGuide() {
             {isBuilding ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" />
-                Building {selectedExtensions.length} image{selectedExtensions.length > 1 ? 's' : ''}...
+                Building {selectedExtensions.map(e => AI_EXTENSIONS[e].name).join(', ')} image{selectedExtensions.length > 1 ? 's' : ''}...
               </>
             ) : (
               <>
                 <Play className="w-5 h-5" />
-                Build & Push {selectedExtensions.length} Image{selectedExtensions.length > 1 ? 's' : ''}
+                Build & Push {selectedExtensions.length > 1 ? `${selectedExtensions.length} Images` : AI_EXTENSIONS[selectedExtensions[0]].name}
               </>
             )}
           </button>

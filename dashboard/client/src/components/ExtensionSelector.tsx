@@ -27,32 +27,6 @@ const EXTENSIONS: Extension[] = [
     credentialSupport: 'Reads from ~/.continue/config.json - credentials auto-configured',
     recommended: true,
     docsUrl: 'https://continue.dev/docs'
-  },
-  {
-    id: 'cline',
-    name: 'Cline',
-    description: 'Autonomous AI coding agent with agentic capabilities',
-    features: [
-      'Autonomous code execution',
-      'Multi-file editing',
-      'Terminal access',
-      'MCP server support'
-    ],
-    credentialSupport: 'Uses VS Code SecretStorage - credentials injected via globalState',
-    docsUrl: 'https://docs.cline.bot'
-  },
-  {
-    id: 'roo-code',
-    name: 'Roo Code',
-    description: 'Fork of Cline with additional features and improvements',
-    features: [
-      'All Cline features',
-      'Enhanced UI/UX',
-      'Settings import/export',
-      'Multiple AI providers'
-    ],
-    credentialSupport: 'Similar to Cline - credentials injected via globalState',
-    docsUrl: 'https://docs.roocode.com'
   }
 ]
 

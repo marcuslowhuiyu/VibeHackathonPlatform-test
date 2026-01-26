@@ -1,7 +1,53 @@
 import { useState } from 'react'
 import { Plus, Loader2, Minus, AlertTriangle, CheckCircle, Package, Bot } from 'lucide-react'
 
-type AIExtension = 'continue' | 'cline' | 'roo-code'
+// ==========================================
+// AI EXTENSION CONFIGURATION
+// Add new AI extensions here to scale support
+// ==========================================
+type AIExtension = 'continue'
+// To add more extensions, update the type:
+// type AIExtension = 'continue' | 'cline' | 'roo-code'
+
+interface ExtensionConfig {
+  name: string
+  description: string
+  color: string
+  bgColor: string
+  enabled: boolean // Set to false to hide from UI but keep code ready
+}
+
+const AI_EXTENSIONS: Record<AIExtension, ExtensionConfig> = {
+  continue: {
+    name: 'Continue',
+    description: 'File-based config, reliable for AWS Bedrock',
+    color: 'text-emerald-400',
+    bgColor: 'bg-emerald-600',
+    enabled: true,
+  },
+  // To add new extensions, uncomment and configure:
+  // cline: {
+  //   name: 'Cline',
+  //   description: 'Autonomous AI coding agent',
+  //   color: 'text-violet-400',
+  //   bgColor: 'bg-violet-600',
+  //   enabled: false,
+  // },
+  // 'roo-code': {
+  //   name: 'Roo Code',
+  //   description: 'Enhanced Cline fork with additional features',
+  //   color: 'text-amber-400',
+  //   bgColor: 'bg-amber-600',
+  //   enabled: false,
+  // },
+}
+
+// Get list of enabled extensions for UI
+const getEnabledExtensions = (): AIExtension[] => {
+  return (Object.keys(AI_EXTENSIONS) as AIExtension[]).filter(
+    (ext) => AI_EXTENSIONS[ext].enabled
+  )
+}
 
 interface SetupStatus {
   configured: boolean
@@ -18,15 +64,11 @@ interface SpinUpFormProps {
   onGoToSetup: () => void
 }
 
-const EXTENSION_LABELS: Record<AIExtension, { name: string; description: string }> = {
-  continue: { name: 'Continue', description: 'File-based config, reliable' },
-  cline: { name: 'Cline', description: 'Autonomous AI agent' },
-  'roo-code': { name: 'Roo Code', description: 'Enhanced Cline fork' },
-}
-
 export default function SpinUpForm({ onSpinUp, isLoading, setupStatus, onGoToSetup }: SpinUpFormProps) {
   const [count, setCount] = useState(1)
   const [selectedExtension, setSelectedExtension] = useState<AIExtension>('continue')
+
+  const enabledExtensions = getEnabledExtensions()
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -128,29 +170,36 @@ export default function SpinUpForm({ onSpinUp, isLoading, setupStatus, onGoToSet
             AI Extension
           </label>
           <div className="flex gap-2 flex-wrap">
-            {(Object.keys(EXTENSION_LABELS) as AIExtension[]).map((ext) => {
+            {enabledExtensions.map((ext) => {
+              const config = AI_EXTENSIONS[ext]
               const isAvailable = availableImages.includes(ext)
+              const isSelected = selectedExtension === ext
               return (
                 <button
                   key={ext}
                   type="button"
                   onClick={() => isAvailable && setSelectedExtension(ext)}
                   disabled={!isAvailable}
-                  className={`px-4 py-2 rounded-lg text-sm transition-all ${
-                    selectedExtension === ext
-                      ? 'bg-blue-600 text-white border-2 border-blue-400'
+                  className={`px-4 py-2 rounded-lg text-sm transition-all border-2 ${
+                    isSelected
+                      ? `${config.bgColor} text-white border-current`
                       : isAvailable
-                      ? 'bg-gray-700 text-gray-300 hover:bg-gray-600 border-2 border-transparent'
-                      : 'bg-gray-800 text-gray-500 cursor-not-allowed border-2 border-transparent opacity-50'
+                      ? 'bg-gray-700 text-gray-300 hover:bg-gray-600 border-transparent'
+                      : 'bg-gray-800 text-gray-500 cursor-not-allowed border-transparent opacity-50'
                   }`}
-                  title={!isAvailable ? 'Image not built - go to Setup to build' : EXTENSION_LABELS[ext].description}
+                  title={!isAvailable ? 'Image not built - go to Setup to build' : config.description}
                 >
-                  {EXTENSION_LABELS[ext].name}
+                  {config.name}
                   {!isAvailable && ' (not built)'}
                 </button>
               )
             })}
           </div>
+          {enabledExtensions.length === 1 && (
+            <p className="text-xs text-gray-500 mt-2 italic">
+              Additional AI extensions can be enabled in the code (AI_EXTENSIONS config)
+            </p>
+          )}
         </div>
 
         <div className="flex flex-wrap items-end gap-4">
@@ -238,7 +287,7 @@ export default function SpinUpForm({ onSpinUp, isLoading, setupStatus, onGoToSet
           ) : (
             <>
               <Plus className="w-5 h-5" />
-              Spin Up {count} {EXTENSION_LABELS[selectedExtension].name} Instance{count > 1 ? 's' : ''}
+              Spin Up {count} {AI_EXTENSIONS[selectedExtension].name} Instance{count > 1 ? 's' : ''}
             </>
           )}
         </button>

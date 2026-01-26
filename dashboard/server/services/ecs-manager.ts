@@ -200,7 +200,7 @@ export async function runTask(instanceId: string, extension: string = 'continue'
               { name: 'AWS_ACCESS_KEY_ID', value: creds.access_key_id },
               { name: 'AWS_SECRET_ACCESS_KEY', value: creds.secret_access_key },
               { name: 'AWS_REGION', value: creds.region },
-              // Pass selected AI extension (continue, cline, or roo-code)
+              // Pass selected AI extension
               { name: 'AI_EXTENSION', value: extension },
             ],
           },

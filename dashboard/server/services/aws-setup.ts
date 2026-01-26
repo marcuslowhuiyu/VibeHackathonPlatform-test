@@ -565,13 +565,21 @@ export async function checkDockerAvailable(): Promise<{ available: boolean; mess
   }
 }
 
-// Available AI extensions
-export const AI_EXTENSIONS = ['continue', 'cline', 'roo-code'] as const;
+// ==========================================
+// AI EXTENSION CONFIGURATION
+// Add new AI extensions here to scale support
+// ==========================================
+// To add new extensions:
+// 1. Add to this array: ['continue', 'cline', 'roo-code']
+// 2. Update the Dockerfile to install the extension
+// 3. Update entrypoint.sh to configure the extension
+// 4. Update frontend AI_EXTENSIONS configs
+export const AI_EXTENSIONS = ['continue'] as const;
 export type AIExtension = typeof AI_EXTENSIONS[number];
 
 export async function buildAndPushImage(
   onProgress?: (result: DockerBuildResult) => void,
-  extensions?: AIExtension[] // If not provided, builds selected extension. Pass ['continue', 'cline', 'roo-code'] for all
+  extensions?: AIExtension[] // If not provided, builds selected extension. Pass ['continue'] for all
 ): Promise<{ success: boolean; steps: DockerBuildResult[]; error?: string }> {
   const steps: DockerBuildResult[] = [];
   const report = (result: DockerBuildResult) => {
@@ -634,7 +642,7 @@ export async function buildAndPushImage(
 
     // Build, tag, and push each extension
     for (const ext of extensionsToBuild) {
-      const extTag = ext; // Tag will be :continue, :cline, or :roo-code
+      const extTag = ext; // Tag will be :continue
 
       // Build Docker image
       report({ success: true, step: `docker_build_${ext}`, message: `Building ${ext} image (this may take several minutes)...` });

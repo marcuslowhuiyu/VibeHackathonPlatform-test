@@ -11,6 +11,9 @@ export interface Instance {
   participant_name?: string
   participant_email?: string
   notes?: string
+  // AI extension used for this instance
+  // To add new extensions, update the type: 'continue' | 'cline' | 'roo-code'
+  ai_extension?: 'continue'
   // CloudFront fields for HTTPS access
   cloudfront_distribution_id?: string
   cloudfront_domain?: string
@@ -143,7 +146,8 @@ export const api = {
 
   // Setup
   getSetupStatus: () =>
-    fetchJson<{ configured: boolean; missing: string[]; ecrImageExists: boolean; imageUri: string | null; availableImages?: ('continue' | 'cline' | 'roo-code')[] }>('/setup/status'),
+    // To add new extensions, update availableImages type: ('continue' | 'cline' | 'roo-code')[]
+    fetchJson<{ configured: boolean; missing: string[]; ecrImageExists: boolean; imageUri: string | null; availableImages?: ('continue')[] }>('/setup/status'),
 
   runSetup: () =>
     fetchJson<{

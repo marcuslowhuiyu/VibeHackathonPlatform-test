@@ -147,14 +147,27 @@ router.post('/spin-up', async (req, res) => {
       return res.status(400).json({ error: 'Count must be between 1 and 100' });
     }
 
-    // Validate extension
-    const validExtensions = ['continue', 'cline', 'roo-code'];
+    // ==========================================
+    // AI EXTENSION VALIDATION
+    // To add new extensions:
+    // 1. Add to validExtensions array
+    // 2. Add to extPrefixes map
+    // ==========================================
+    const validExtensions = ['continue'];
+    // const validExtensions = ['continue', 'cline', 'roo-code']; // Enable when ready
+
+    const extPrefixes: Record<string, string> = {
+      continue: 'ct',
+      // cline: 'cl',      // Enable when ready
+      // 'roo-code': 'rc', // Enable when ready
+    };
+
     if (!validExtensions.includes(extension)) {
-      return res.status(400).json({ error: `Invalid extension. Must be one of: ${validExtensions.join(', ')}` });
+      return res.status(400).json({ error: `Invalid extension. Valid options: ${validExtensions.join(', ')}` });
     }
 
     // Use extension abbreviation for instance ID
-    const extPrefix = extension === 'continue' ? 'ct' : extension === 'cline' ? 'cl' : 'rc';
+    const extPrefix = extPrefixes[extension] || 'ct';
 
     const results: Instance[] = [];
     const errors: string[] = [];
@@ -164,8 +177,8 @@ router.post('/spin-up', async (req, res) => {
       const instanceId = `vibe-${extPrefix}-${nanoid(5)}`;
 
       try {
-        // Create local record
-        const instance = createInstance(instanceId);
+        // Create local record with extension info
+        const instance = createInstance(instanceId, extension);
 
         // Start ECS task with specific extension image
         const taskInfo = await runTask(instanceId, extension);

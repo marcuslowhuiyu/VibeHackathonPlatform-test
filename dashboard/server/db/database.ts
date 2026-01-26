@@ -83,6 +83,9 @@ export interface Instance {
   participant_name?: string;
   participant_email?: string;
   notes?: string;
+  // AI extension used for this instance
+  // To add new extensions, update the type: 'continue' | 'cline' | 'roo-code'
+  ai_extension?: 'continue';
   // CloudFront fields for HTTPS access
   cloudfront_distribution_id?: string;
   cloudfront_domain?: string;
@@ -90,7 +93,7 @@ export interface Instance {
   public_ip?: string;
 }
 
-export function createInstance(id: string): Instance {
+export function createInstance(id: string, aiExtension?: 'continue'): Instance {
   const db = loadDb();
   const instance: Instance = {
     id,
@@ -100,6 +103,7 @@ export function createInstance(id: string): Instance {
     app_url: null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    ai_extension: aiExtension,
   };
   db.instances.push(instance);
   saveDb(db);

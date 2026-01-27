@@ -14,6 +14,7 @@ import {
   getDistributionStatus,
   disableDistribution,
   deleteDistribution,
+  updateDistributionOrigin,
 } from '../services/cloudfront-manager.js';
 
 const router = Router();
@@ -22,21 +23,35 @@ const router = Router();
 async function ensureCloudFrontDistribution(instance: Instance, publicIp: string): Promise<void> {
   console.log(`[CloudFront] Checking instance ${instance.id}: publicIp=${publicIp}, existing_cf=${instance.cloudfront_distribution_id}`);
 
-  // Skip if already has CloudFront or no public IP
-  if (!publicIp || instance.cloudfront_distribution_id) {
-    // If we have a distribution, check its status
-    if (instance.cloudfront_distribution_id) {
-      try {
-        const status = await getDistributionStatus(instance.cloudfront_distribution_id);
-        if (status && status.status !== instance.cloudfront_status) {
+  // Skip if no public IP
+  if (!publicIp) {
+    return;
+  }
+
+  // If already has CloudFront, check status and update origin if IP changed
+  if (instance.cloudfront_distribution_id) {
+    try {
+      const status = await getDistributionStatus(instance.cloudfront_distribution_id);
+      if (status) {
+        // Check if IP has changed - need to update CloudFront origin
+        if (instance.public_ip && instance.public_ip !== publicIp) {
+          console.log(`[CloudFront] IP changed for ${instance.id}: ${instance.public_ip} -> ${publicIp}, updating origin...`);
+          await updateDistributionOrigin(instance.cloudfront_distribution_id, publicIp);
+          updateInstance(instance.id, {
+            public_ip: publicIp,
+            cloudfront_status: 'InProgress', // Will be deploying after update
+          });
+          instance.public_ip = publicIp;
+          instance.cloudfront_status = 'InProgress';
+        } else if (status.status !== instance.cloudfront_status) {
           updateInstance(instance.id, {
             cloudfront_status: status.status,
           });
           instance.cloudfront_status = status.status;
         }
-      } catch (err) {
-        console.error(`Error checking CloudFront status for ${instance.id}:`, err);
       }
+    } catch (err) {
+      console.error(`Error checking/updating CloudFront for ${instance.id}:`, err);
     }
     return;
   }
@@ -105,16 +120,18 @@ router.get('/', async (req, res) => {
             let appUrl: string | null = null;
 
             if (instance.cloudfront_domain) {
-              // CloudFront URL available - use HTTPS (works even during deployment)
+              // CloudFront URL available - use HTTPS for VS Code (works even during deployment)
               vscodeUrl = `https://${instance.cloudfront_domain}`;
-              appUrl = `https://${instance.cloudfront_domain}:3000`; // Note: CloudFront only handles port 8080
+              // CloudFront only proxies port 8080 (VS Code), so React app must use direct IP
+              appUrl = taskInfo.publicIp ? `http://${taskInfo.publicIp}:3000` : null;
             } else if (taskInfo.publicIp) {
               // Fall back to direct IP if CloudFront not yet created
               vscodeUrl = `http://${taskInfo.publicIp}:8080`;
               appUrl = `http://${taskInfo.publicIp}:3000`;
             }
 
-            if (instance.status !== newStatus || instance.vscode_url !== vscodeUrl) {
+            // Update if any field has changed
+            if (instance.status !== newStatus || instance.vscode_url !== vscodeUrl || instance.app_url !== appUrl) {
               updateInstance(instance.id, {
                 status: newStatus,
                 vscode_url: vscodeUrl,

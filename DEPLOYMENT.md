@@ -243,20 +243,226 @@ If you want automatic deployment on every push, the workflow is already set up i
 
 3. Push to main branch - deployment runs automatically!
 
----
+### Required IAM Permissions
 
-## Adding HTTPS (Optional)
+Create an IAM user with this policy for the GitHub Actions secrets:
 
-### Option A: CloudFront (Recommended for Production)
-
-```bash
-# Create CloudFront distribution pointing to your EC2/ECS
-aws cloudfront create-distribution \
-  --origin-domain-name <your-ec2-ip> \
-  --default-root-object index.html
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ECR",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:PutImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:DescribeRepositories",
+        "ecr:CreateRepository"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ECS",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeServices",
+        "ecs:CreateService",
+        "ecs:UpdateService",
+        "ecs:RegisterTaskDefinition",
+        "ecs:DescribeTaskDefinition",
+        "ecs:ListTasks",
+        "ecs:DescribeTasks"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "EC2",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeVpcs",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeSecurityGroups",
+        "ec2:CreateSecurityGroup",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:DescribeNetworkInterfaces"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "LoadBalancer",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:CreateLoadBalancer",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:CreateTargetGroup",
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:CreateListener",
+        "elasticloadbalancing:ModifyTargetGroup",
+        "elasticloadbalancing:AddTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudFront",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:ListDistributions",
+        "cloudfront:GetDistribution",
+        "cloudfront:CreateDistribution",
+        "cloudfront:UpdateDistribution",
+        "cloudfront:GetDistributionConfig"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IAMPassRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "STS",
+      "Effect": "Allow",
+      "Action": "sts:GetCallerIdentity",
+      "Resource": "*"
+    }
+  ]
+}
 ```
 
-### Option B: Let's Encrypt with Nginx (EC2 only)
+---
+
+## HTTPS via CloudFront (Automatic with GitHub Actions)
+
+The GitHub Actions workflow automatically creates:
+1. **Application Load Balancer** - Stable endpoint for your ECS service
+2. **CloudFront Distribution** - HTTPS with default `*.cloudfront.net` certificate
+
+After deployment, you'll see output like:
+```
+HTTPS URLs (Recommended):
+  Admin Login:        https://d1234abcd.cloudfront.net/#/login
+  Participant Portal: https://d1234abcd.cloudfront.net/#/portal
+```
+
+**Note:** CloudFront takes 5-15 minutes to fully deploy. Use the ALB URL initially if needed.
+
+---
+
+## Adding a Custom Domain (Optional)
+
+Want `https://hackathon.yourdomain.com` instead of `d1234abcd.cloudfront.net`?
+
+### Step 1: Request ACM Certificate (Must be us-east-1!)
+
+```bash
+# Request certificate (MUST be in us-east-1 for CloudFront)
+aws acm request-certificate \
+  --domain-name hackathon.yourdomain.com \
+  --validation-method DNS \
+  --region us-east-1
+
+# Note the CertificateArn from the output
+```
+
+### Step 2: Validate the Certificate
+
+1. Go to AWS Console → Certificate Manager → us-east-1
+2. Click on your certificate
+3. Click "Create records in Route 53" (or manually add the CNAME record)
+4. Wait for status to change to "Issued" (usually 5-30 minutes)
+
+### Step 3: Update CloudFront Distribution
+
+```bash
+# Get your CloudFront distribution ID (from deployment output)
+CF_DIST_ID="EXXXXXXXX"
+
+# Get current config
+aws cloudfront get-distribution-config --id $CF_DIST_ID > cf-config.json
+
+# Edit cf-config.json:
+# 1. Add your domain to "Aliases": {"Quantity": 1, "Items": ["hackathon.yourdomain.com"]}
+# 2. Update ViewerCertificate to use ACM:
+#    "ViewerCertificate": {
+#      "ACMCertificateArn": "arn:aws:acm:us-east-1:ACCOUNT:certificate/XXXXX",
+#      "SSLSupportMethod": "sni-only",
+#      "MinimumProtocolVersion": "TLSv1.2_2021"
+#    }
+
+# Get the ETag from the response
+ETAG=$(cat cf-config.json | jq -r '.ETag')
+
+# Extract just the DistributionConfig part
+cat cf-config.json | jq '.DistributionConfig' > update-config.json
+
+# Update the distribution
+aws cloudfront update-distribution \
+  --id $CF_DIST_ID \
+  --if-match $ETAG \
+  --distribution-config file://update-config.json
+```
+
+### Step 4: Create Route 53 Record
+
+```bash
+# Get your hosted zone ID
+ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='yourdomain.com.'].Id" --output text | cut -d'/' -f3)
+
+# Create alias record pointing to CloudFront
+aws route53 change-resource-record-sets --hosted-zone-id $ZONE_ID --change-batch '{
+  "Changes": [{
+    "Action": "CREATE",
+    "ResourceRecordSet": {
+      "Name": "hackathon.yourdomain.com",
+      "Type": "A",
+      "AliasTarget": {
+        "HostedZoneId": "Z2FDTNDATAQYW2",
+        "DNSName": "d1234abcd.cloudfront.net",
+        "EvaluateTargetHealth": false
+      }
+    }
+  }]
+}'
+```
+
+**Note:** `Z2FDTNDATAQYW2` is CloudFront's hosted zone ID (same for all distributions).
+
+### Step 5: Test
+
+```bash
+curl -I https://hackathon.yourdomain.com
+```
+
+---
+
+## Alternative: Let's Encrypt with Nginx (EC2 Only)
+
+If deploying to EC2 directly (not using GitHub Actions), you can use Let's Encrypt:
 
 ```bash
 # Install Nginx and Certbot

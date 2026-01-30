@@ -53,6 +53,89 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
+      - name: Setup Infrastructure (VPC, ALB, Target Group)
+        id: infra
+        run: |
+          # Get VPC
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=vibe-vpc" --query 'Vpcs[0].VpcId' --output text)
+          if [ "$VPC_ID" == "None" ] || [ -z "$VPC_ID" ]; then
+            VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text)
+          fi
+          echo "vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
+
+          # Get subnets (need at least 2 in different AZs for ALB)
+          SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[*].SubnetId' --output text | tr '\t' ',')
+          echo "subnet_ids=$SUBNET_IDS" >> $GITHUB_OUTPUT
+
+          # Create or get ALB security group
+          ALB_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=vibe-dashboard-alb-sg" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+          if [ "$ALB_SG_ID" == "None" ] || [ -z "$ALB_SG_ID" ]; then
+            ALB_SG_ID=$(aws ec2 create-security-group --group-name vibe-dashboard-alb-sg --description "Vibe Dashboard ALB Security Group" --vpc-id $VPC_ID --query 'GroupId' --output text)
+            aws ec2 authorize-security-group-ingress --group-id $ALB_SG_ID --protocol tcp --port 80 --cidr 0.0.0.0/0
+            aws ec2 authorize-security-group-ingress --group-id $ALB_SG_ID --protocol tcp --port 443 --cidr 0.0.0.0/0
+          fi
+          echo "alb_sg_id=$ALB_SG_ID" >> $GITHUB_OUTPUT
+
+          # Create or get ECS task security group
+          ECS_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=vibe-dashboard-ecs-sg" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+          if [ "$ECS_SG_ID" == "None" ] || [ -z "$ECS_SG_ID" ]; then
+            ECS_SG_ID=$(aws ec2 create-security-group --group-name vibe-dashboard-ecs-sg --description "Vibe Dashboard ECS Security Group" --vpc-id $VPC_ID --query 'GroupId' --output text)
+            # Allow traffic from ALB only
+            aws ec2 authorize-security-group-ingress --group-id $ECS_SG_ID --protocol tcp --port 3001 --source-group $ALB_SG_ID
+          fi
+          echo "ecs_sg_id=$ECS_SG_ID" >> $GITHUB_OUTPUT
+
+          # Create or get ALB
+          ALB_ARN=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
+          if [ "$ALB_ARN" == "None" ] || [ -z "$ALB_ARN" ]; then
+            # Convert comma-separated to space-separated for ALB creation
+            SUBNET_LIST=$(echo $SUBNET_IDS | tr ',' ' ')
+            ALB_ARN=$(aws elbv2 create-load-balancer \
+              --name vibe-dashboard-alb \
+              --subnets $SUBNET_LIST \
+              --security-groups $ALB_SG_ID \
+              --scheme internet-facing \
+              --type application \
+              --query 'LoadBalancers[0].LoadBalancerArn' \
+              --output text)
+            echo "Created new ALB: $ALB_ARN"
+          fi
+          echo "alb_arn=$ALB_ARN" >> $GITHUB_OUTPUT
+
+          # Get ALB DNS name
+          ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].DNSName' --output text)
+          echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
+
+          # Create or get target group
+          TG_ARN=$(aws elbv2 describe-target-groups --names vibe-dashboard-tg --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
+          if [ "$TG_ARN" == "None" ] || [ -z "$TG_ARN" ]; then
+            TG_ARN=$(aws elbv2 create-target-group \
+              --name vibe-dashboard-tg \
+              --protocol HTTP \
+              --port 3001 \
+              --vpc-id $VPC_ID \
+              --target-type ip \
+              --health-check-path /api/health \
+              --health-check-interval-seconds 30 \
+              --healthy-threshold-count 2 \
+              --unhealthy-threshold-count 3 \
+              --query 'TargetGroups[0].TargetGroupArn' \
+              --output text)
+            echo "Created new target group: $TG_ARN"
+          fi
+          echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
+
+          # Create HTTP listener if not exists
+          LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text 2>/dev/null)
+          if [ -z "$LISTENER_ARN" ] || [ "$LISTENER_ARN" == "None" ]; then
+            aws elbv2 create-listener \
+              --load-balancer-arn $ALB_ARN \
+              --protocol HTTP \
+              --port 80 \
+              --default-actions Type=forward,TargetGroupArn=$TG_ARN
+            echo "Created HTTP listener"
+          fi
+
       - name: Check if ECS service exists
         id: check-service
         run: |
@@ -135,35 +218,17 @@ jobs:
       - name: Create ECS service if not exists
         if: steps.check-service.outputs.exists == 'false'
         run: |
-          # Get VPC and subnet info from existing setup (uses same infra as coding lab)
-          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=vibe-vpc" --query 'Vpcs[0].VpcId' --output text)
-
-          # If no vibe-vpc, use default VPC
-          if [ "$VPC_ID" == "None" ] || [ -z "$VPC_ID" ]; then
-            VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text)
-          fi
-
-          SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[*].SubnetId' --output text | tr '\t' ',')
-
-          # Get or create security group
-          SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=vibe-dashboard-sg" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
-
-          if [ "$SG_ID" == "None" ] || [ -z "$SG_ID" ]; then
-            SG_ID=$(aws ec2 create-security-group --group-name vibe-dashboard-sg --description "Vibe Dashboard Security Group" --vpc-id $VPC_ID --query 'GroupId' --output text)
-            aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 3001 --cidr 0.0.0.0/0
-            aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 443 --cidr 0.0.0.0/0
-            aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 80 --cidr 0.0.0.0/0
-          fi
-
-          # Create the ECS service
+          # Create the ECS service with ALB integration
           aws ecs create-service \
             --cluster ${{ env.ECS_CLUSTER }} \
             --service-name ${{ env.ECS_SERVICE }} \
             --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
             --desired-count 1 \
             --launch-type FARGATE \
-            --network-configuration "awsvpcConfiguration={subnets=[${SUBNET_IDS}],securityGroups=[$SG_ID],assignPublicIp=ENABLED}" \
-            --deployment-configuration "minimumHealthyPercent=0,maximumPercent=200"
+            --network-configuration "awsvpcConfiguration={subnets=[${{ steps.infra.outputs.subnet_ids }}],securityGroups=[${{ steps.infra.outputs.ecs_sg_id }}],assignPublicIp=ENABLED}" \
+            --load-balancers "targetGroupArn=${{ steps.infra.outputs.tg_arn }},containerName=${{ env.CONTAINER_NAME }},containerPort=3001" \
+            --deployment-configuration "minimumHealthyPercent=0,maximumPercent=200" \
+            --health-check-grace-period-seconds 60
 
       - name: Update ECS service
         if: steps.check-service.outputs.exists == 'true'
@@ -174,30 +239,118 @@ jobs:
             --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
             --force-new-deployment
 
+      - name: Setup CloudFront Distribution
+        id: cloudfront
+        run: |
+          ALB_DNS="${{ steps.infra.outputs.alb_dns }}"
+
+          # Check if CloudFront distribution exists for this ALB
+          EXISTING_DIST=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[0].DomainName=='$ALB_DNS'].Id" --output text 2>/dev/null || echo "")
+
+          if [ -n "$EXISTING_DIST" ] && [ "$EXISTING_DIST" != "None" ]; then
+            echo "CloudFront distribution already exists: $EXISTING_DIST"
+            CF_DOMAIN=$(aws cloudfront get-distribution --id $EXISTING_DIST --query 'Distribution.DomainName' --output text)
+            echo "cf_domain=$CF_DOMAIN" >> $GITHUB_OUTPUT
+            echo "cf_id=$EXISTING_DIST" >> $GITHUB_OUTPUT
+          else
+            # Create CloudFront distribution
+            CALLER_REF="vibe-dashboard-$(date +%s)"
+
+            cat > cf-config.json << EOF
+          {
+            "CallerReference": "$CALLER_REF",
+            "Comment": "Vibe Dashboard HTTPS",
+            "Enabled": true,
+            "Origins": {
+              "Quantity": 1,
+              "Items": [
+                {
+                  "Id": "alb-origin",
+                  "DomainName": "$ALB_DNS",
+                  "CustomOriginConfig": {
+                    "HTTPPort": 80,
+                    "HTTPSPort": 443,
+                    "OriginProtocolPolicy": "http-only",
+                    "OriginSslProtocols": {
+                      "Quantity": 1,
+                      "Items": ["TLSv1.2"]
+                    }
+                  }
+                }
+              ]
+            },
+            "DefaultCacheBehavior": {
+              "TargetOriginId": "alb-origin",
+              "ViewerProtocolPolicy": "redirect-to-https",
+              "AllowedMethods": {
+                "Quantity": 7,
+                "Items": ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
+                "CachedMethods": {
+                  "Quantity": 2,
+                  "Items": ["GET", "HEAD"]
+                }
+              },
+              "ForwardedValues": {
+                "QueryString": true,
+                "Cookies": {
+                  "Forward": "all"
+                },
+                "Headers": {
+                  "Quantity": 3,
+                  "Items": ["Authorization", "Origin", "Host"]
+                }
+              },
+              "MinTTL": 0,
+              "DefaultTTL": 0,
+              "MaxTTL": 0,
+              "Compress": true
+            },
+            "PriceClass": "PriceClass_100",
+            "ViewerCertificate": {
+              "CloudFrontDefaultCertificate": true
+            }
+          }
+          EOF
+
+            CF_RESULT=$(aws cloudfront create-distribution --distribution-config file://cf-config.json)
+            CF_ID=$(echo $CF_RESULT | jq -r '.Distribution.Id')
+            CF_DOMAIN=$(echo $CF_RESULT | jq -r '.Distribution.DomainName')
+
+            echo "Created CloudFront distribution: $CF_ID"
+            echo "cf_domain=$CF_DOMAIN" >> $GITHUB_OUTPUT
+            echo "cf_id=$CF_ID" >> $GITHUB_OUTPUT
+          fi
+
       - name: Wait for service stability
         run: |
           echo "Waiting for service to stabilize..."
           aws ecs wait services-stable --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} || true
 
-      - name: Get service URL
+      - name: Output URLs
         run: |
-          # Get the task ARN
-          TASK_ARN=$(aws ecs list-tasks --cluster ${{ env.ECS_CLUSTER }} --service-name ${{ env.ECS_SERVICE }} --query 'taskArns[0]' --output text)
-
-          if [ "$TASK_ARN" != "None" ] && [ -n "$TASK_ARN" ]; then
-            # Get the ENI
-            ENI_ID=$(aws ecs describe-tasks --cluster ${{ env.ECS_CLUSTER }} --tasks $TASK_ARN --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text)
-
-            # Get the public IP
-            PUBLIC_IP=$(aws ec2 describe-network-interfaces --network-interface-ids $ENI_ID --query 'NetworkInterfaces[0].Association.PublicIp' --output text 2>/dev/null || echo "pending")
-
-            echo "========================================"
-            echo "Dashboard deployed successfully!"
-            echo "========================================"
-            echo "URL: http://$PUBLIC_IP:3001"
-            echo "Admin Login: http://$PUBLIC_IP:3001/#/login"
-            echo "Participant Portal: http://$PUBLIC_IP:3001/#/portal"
-            echo "========================================"
-          else
-            echo "Service is starting up, check AWS console for URL"
-          fi
+          echo ""
+          echo "========================================"
+          echo "  DEPLOYMENT COMPLETE!"
+          echo "========================================"
+          echo ""
+          echo "  HTTPS URLs (Recommended):"
+          echo "  -------------------------"
+          echo "  Admin Login:        https://${{ steps.cloudfront.outputs.cf_domain }}/#/login"
+          echo "  Participant Portal: https://${{ steps.cloudfront.outputs.cf_domain }}/#/portal"
+          echo ""
+          echo "  HTTP URLs (Direct ALB - not secure):"
+          echo "  ------------------------------------"
+          echo "  Admin Login:        http://${{ steps.infra.outputs.alb_dns }}/#/login"
+          echo "  Participant Portal: http://${{ steps.infra.outputs.alb_dns }}/#/portal"
+          echo ""
+          echo "  CloudFront ID: ${{ steps.cloudfront.outputs.cf_id }}"
+          echo ""
+          echo "  NOTE: CloudFront may take 5-15 minutes to fully deploy."
+          echo "        Use the ALB URL initially if CloudFront isn't ready."
+          echo ""
+          echo "  To add a custom domain later:"
+          echo "  1. Request ACM certificate in us-east-1"
+          echo "  2. Add domain to CloudFront alternate domain names"
+          echo "  3. Create Route 53 alias record pointing to CloudFront"
+          echo ""
+          echo "========================================"

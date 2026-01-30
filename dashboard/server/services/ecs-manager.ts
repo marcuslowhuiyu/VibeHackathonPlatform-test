@@ -301,6 +301,85 @@ export async function listAllTasks(): Promise<string[]> {
   return response.taskArns || [];
 }
 
+export interface RunningTaskInfo {
+  taskArn: string;
+  taskId: string;
+  status: string;
+  publicIp?: string;
+  privateIp?: string;
+  startedAt?: Date;
+  taskDefinition?: string;
+}
+
+// Get detailed info for all running tasks in the cluster
+export async function getAllRunningTasks(): Promise<RunningTaskInfo[]> {
+  const client = getECSClient();
+  const ec2Client = getEC2Client();
+  const config = getAllConfig();
+  const clusterName = config.cluster_name || 'vibe-cluster';
+
+  // First list all task ARNs
+  const listResponse = await client.send(
+    new ListTasksCommand({
+      cluster: clusterName,
+    })
+  );
+
+  const taskArns = listResponse.taskArns || [];
+  if (taskArns.length === 0) {
+    return [];
+  }
+
+  // Get details for all tasks
+  const describeResponse = await client.send(
+    new DescribeTasksCommand({
+      cluster: clusterName,
+      tasks: taskArns,
+    })
+  );
+
+  const tasks: RunningTaskInfo[] = [];
+
+  for (const task of describeResponse.tasks || []) {
+    // Extract task ID from ARN
+    const taskId = task.taskArn?.split('/').pop() || '';
+
+    // Get ENI for IP addresses
+    const eniAttachment = task.attachments?.find(a => a.type === 'ElasticNetworkInterface');
+    const eniId = eniAttachment?.details?.find(d => d.name === 'networkInterfaceId')?.value;
+
+    let publicIp: string | undefined;
+    let privateIp: string | undefined;
+
+    if (eniId) {
+      try {
+        const eniResponse = await ec2Client.send(
+          new DescribeNetworkInterfacesCommand({
+            NetworkInterfaceIds: [eniId],
+          })
+        );
+        const eni = eniResponse.NetworkInterfaces?.[0];
+        publicIp = eni?.Association?.PublicIp;
+        privateIp = eni?.PrivateIpAddress;
+      } catch (err) {
+        // ENI might not be ready
+      }
+    }
+
+    tasks.push({
+      taskArn: task.taskArn!,
+      taskId,
+      status: task.lastStatus || 'UNKNOWN',
+      publicIp,
+      privateIp,
+      startedAt: task.startedAt,
+      taskDefinition: task.taskDefinitionArn?.split('/').pop(),
+    });
+  }
+
+  return tasks;
+}
+
 export interface PermissionCheck {
   service: string;
   permission: string;

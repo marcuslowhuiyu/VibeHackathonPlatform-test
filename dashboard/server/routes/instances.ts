@@ -7,8 +7,10 @@ import {
   updateInstance,
   deleteInstance,
   Instance,
+  getUnassignedParticipants,
+  assignParticipantToInstance,
 } from '../db/database.js';
-import { runTask, stopTask, getTaskStatus } from '../services/ecs-manager.js';
+import { runTask, stopTask, getTaskStatus, getAllRunningTasks } from '../services/ecs-manager.js';
 import {
   createDistribution,
   getDistributionStatus,
@@ -158,7 +160,7 @@ router.get('/', async (req, res) => {
 // Spin up new instances
 router.post('/spin-up', async (req, res) => {
   try {
-    const { count = 1, extension = 'continue' } = req.body;
+    const { count = 1, extension = 'continue', autoAssignParticipants = true } = req.body;
 
     if (count < 1 || count > 100) {
       return res.status(400).json({ error: 'Count must be between 1 and 100' });
@@ -186,8 +188,12 @@ router.post('/spin-up', async (req, res) => {
     // Use extension abbreviation for instance ID
     const extPrefix = extPrefixes[extension] || 'ct';
 
+    // Get unassigned participants if auto-assign is enabled
+    const unassignedParticipants = autoAssignParticipants ? getUnassignedParticipants() : [];
+
     const results: Instance[] = [];
     const errors: string[] = [];
+    const assignedParticipants: string[] = [];
 
     // Spin up instances in parallel for faster provisioning
     const promises = Array.from({ length: count }, async (_, i) => {
@@ -206,6 +212,18 @@ router.post('/spin-up', async (req, res) => {
           status: taskInfo.status.toLowerCase(),
         });
 
+        // Auto-assign participant if available
+        if (autoAssignParticipants && i < unassignedParticipants.length) {
+          const participant = unassignedParticipants[i];
+          assignParticipantToInstance(participant.id, instanceId);
+          assignedParticipants.push(participant.name);
+
+          // Update the instance object with participant info
+          instance.participant_name = participant.name;
+          instance.participant_email = participant.email;
+          instance.notes = participant.notes;
+        }
+
         results.push({
           ...instance,
           task_arn: taskInfo.taskArn,
@@ -221,6 +239,7 @@ router.post('/spin-up', async (req, res) => {
     res.json({
       success: results.length > 0,
       instances: results,
+      participantsAssigned: assignedParticipants.length,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (err: any) {
@@ -444,6 +463,163 @@ router.patch('/:id', async (req, res) => {
     });
 
     res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Scan for orphaned instances (running on AWS but not tracked in dashboard)
+router.get('/orphaned/scan', async (req, res) => {
+  try {
+    // Get all running tasks from AWS
+    const runningTasks = await getAllRunningTasks();
+
+    // Get all tracked instances from database
+    const trackedInstances = getAllInstances();
+    const trackedTaskArns = new Set(
+      trackedInstances
+        .filter((i) => i.task_arn)
+        .map((i) => i.task_arn)
+    );
+
+    // Find orphaned tasks (running on AWS but not in our database)
+    const orphanedTasks = runningTasks.filter(
+      (task) => !trackedTaskArns.has(task.taskArn)
+    );
+
+    res.json({
+      total_running: runningTasks.length,
+      tracked: trackedInstances.filter((i) => i.task_arn).length,
+      orphaned: orphanedTasks.length,
+      orphaned_tasks: orphanedTasks.map((task) => ({
+        task_arn: task.taskArn,
+        task_id: task.taskId,
+        status: task.status,
+        public_ip: task.publicIp,
+        private_ip: task.privateIp,
+        started_at: task.startedAt,
+        task_definition: task.taskDefinition,
+        vscode_url: task.publicIp ? `http://${task.publicIp}:8080` : null,
+        app_url: task.publicIp ? `http://${task.publicIp}:3000` : null,
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Import an orphaned task into the dashboard
+router.post('/orphaned/import', async (req, res) => {
+  try {
+    const { task_arn, task_id } = req.body;
+
+    if (!task_arn) {
+      return res.status(400).json({ error: 'task_arn is required' });
+    }
+
+    // Check if already tracked
+    const existing = getAllInstances().find((i) => i.task_arn === task_arn);
+    if (existing) {
+      return res.status(400).json({ error: 'Task is already tracked', instance_id: existing.id });
+    }
+
+    // Get current task status
+    const taskInfo = await getTaskStatus(task_arn);
+    if (!taskInfo) {
+      return res.status(404).json({ error: 'Task not found on AWS' });
+    }
+
+    // Create instance record
+    const instanceId = `imported-${task_id || nanoid(8)}`;
+    const instance = createInstance(instanceId);
+
+    // Update with task info
+    updateInstance(instanceId, {
+      task_arn: task_arn,
+      status: taskInfo.status.toLowerCase(),
+      vscode_url: taskInfo.publicIp ? `http://${taskInfo.publicIp}:8080` : null,
+      app_url: taskInfo.publicIp ? `http://${taskInfo.publicIp}:3000` : null,
+      public_ip: taskInfo.publicIp,
+    });
+
+    res.json({
+      success: true,
+      instance_id: instanceId,
+      message: 'Task imported successfully',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Terminate an orphaned task (without importing it)
+router.post('/orphaned/terminate', async (req, res) => {
+  try {
+    const { task_arn } = req.body;
+
+    if (!task_arn) {
+      return res.status(400).json({ error: 'task_arn is required' });
+    }
+
+    // Check if tracked - if so, use normal delete flow
+    const existing = getAllInstances().find((i) => i.task_arn === task_arn);
+    if (existing) {
+      return res.status(400).json({
+        error: 'Task is tracked in dashboard. Use the delete instance endpoint instead.',
+        instance_id: existing.id,
+      });
+    }
+
+    // Stop the task directly
+    await stopTask(task_arn);
+
+    res.json({
+      success: true,
+      message: 'Orphaned task terminated',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Terminate all orphaned tasks
+router.post('/orphaned/terminate-all', async (req, res) => {
+  try {
+    // Get all running tasks from AWS
+    const runningTasks = await getAllRunningTasks();
+
+    // Get tracked task ARNs
+    const trackedInstances = getAllInstances();
+    const trackedTaskArns = new Set(
+      trackedInstances
+        .filter((i) => i.task_arn)
+        .map((i) => i.task_arn)
+    );
+
+    // Find and terminate orphaned tasks
+    const orphanedTasks = runningTasks.filter(
+      (task) => !trackedTaskArns.has(task.taskArn)
+    );
+
+    const results = {
+      total: orphanedTasks.length,
+      terminated: 0,
+      errors: [] as string[],
+    };
+
+    for (const task of orphanedTasks) {
+      try {
+        await stopTask(task.taskArn);
+        results.terminated++;
+      } catch (err: any) {
+        results.errors.push(`${task.taskId}: ${err.message}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      ...results,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Loader2, Minus, AlertTriangle, CheckCircle, Package, Bot } from 'lucide-react'
+import { Plus, Loader2, Minus, AlertTriangle, CheckCircle, Package, Bot, Users } from 'lucide-react'
 
 // ==========================================
 // AI EXTENSION CONFIGURATION
@@ -58,24 +58,29 @@ interface SetupStatus {
 }
 
 interface SpinUpFormProps {
-  onSpinUp: (count: number, extension: AIExtension) => void
+  onSpinUp: (count: number, extension: AIExtension, autoAssignParticipants: boolean) => void
   isLoading: boolean
   setupStatus?: SetupStatus
   onGoToSetup: () => void
+  unassignedParticipants?: number
 }
 
-export default function SpinUpForm({ onSpinUp, isLoading, setupStatus, onGoToSetup }: SpinUpFormProps) {
+export default function SpinUpForm({ onSpinUp, isLoading, setupStatus, onGoToSetup, unassignedParticipants = 0 }: SpinUpFormProps) {
   const [count, setCount] = useState(1)
   const [selectedExtension, setSelectedExtension] = useState<AIExtension>('continue')
+  const [autoAssign, setAutoAssign] = useState(true)
 
   const enabledExtensions = getEnabledExtensions()
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (count >= 1 && count <= 100) {
-      onSpinUp(count, selectedExtension)
+      onSpinUp(count, selectedExtension, autoAssign)
     }
   }
+
+  // Calculate how many participants will be assigned
+  const participantsToAssign = autoAssign ? Math.min(count, unassignedParticipants) : 0
 
   // Available images from ECR (or default to continue if not specified)
   const availableImages = setupStatus?.availableImages || ['continue']
@@ -272,6 +277,39 @@ export default function SpinUpForm({ onSpinUp, isLoading, setupStatus, onGoToSet
             ))}
           </div>
         </div>
+
+        {/* Auto-assign participants section */}
+        {unassignedParticipants > 0 && (
+          <div className="w-full bg-gray-700/50 rounded-lg p-3">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoAssign}
+                onChange={(e) => setAutoAssign(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-500 bg-gray-600 text-blue-500 focus:ring-blue-500 focus:ring-offset-gray-800"
+              />
+              <span className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-yellow-400" />
+                <span className="text-sm">
+                  Auto-assign participants
+                  <span className="text-yellow-400 ml-1">
+                    ({unassignedParticipants} unassigned)
+                  </span>
+                </span>
+              </span>
+            </label>
+            {autoAssign && (
+              <p className="text-xs text-gray-400 mt-2 ml-7">
+                {participantsToAssign} of {count} instance{count > 1 ? 's' : ''} will be assigned to participants
+                {count > unassignedParticipants && (
+                  <span className="text-orange-400">
+                    {' '}({count - unassignedParticipants} will be blank)
+                  </span>
+                )}
+              </p>
+            )}
+          </div>
+        )}
 
         <button
           type="submit"

@@ -6,6 +6,10 @@ import instancesRouter from './routes/instances.js';
 import credentialsRouter from './routes/credentials.js';
 import configRouter from './routes/config.js';
 import setupRouter from './routes/setup.js';
+import participantsRouter from './routes/participants.js';
+import authRouter from './routes/auth.js';
+import portalRouter from './routes/portal.js';
+import { requireAdmin } from './middleware/auth.js';
 import { initDatabase } from './db/database.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -21,11 +25,18 @@ app.use(express.json());
 // Initialize database
 initDatabase();
 
-// API Routes
-app.use('/api/instances', instancesRouter);
-app.use('/api/credentials', credentialsRouter);
-app.use('/api/config', configRouter);
-app.use('/api/setup', setupRouter);
+// Public API Routes (no auth required)
+app.use('/api/auth', authRouter);
+
+// Protected Admin API Routes
+app.use('/api/instances', requireAdmin, instancesRouter);
+app.use('/api/credentials', requireAdmin, credentialsRouter);
+app.use('/api/config', requireAdmin, configRouter);
+app.use('/api/setup', requireAdmin, setupRouter);
+app.use('/api/participants', requireAdmin, participantsRouter);
+
+// Participant Portal Routes
+app.use('/api/portal', portalRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -34,9 +45,29 @@ app.get('/api/health', (req, res) => {
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../client/dist')));
+  const clientDist = path.join(__dirname, '../client/dist');
+  app.use(express.static(clientDist));
+
+  // Clean URL redirects - redirect to hash routes
+  app.get('/portal', (req, res) => {
+    res.redirect('/#/portal');
+  });
+
+  app.get('/portal/*', (req, res) => {
+    res.redirect('/#/portal');
+  });
+
+  app.get('/admin', (req, res) => {
+    res.redirect('/#/login');
+  });
+
+  app.get('/login', (req, res) => {
+    res.redirect('/#/login');
+  });
+
+  // SPA fallback - serve index.html for all other routes
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../client/dist/index.html'));
+    res.sendFile(path.join(clientDist, 'index.html'));
   });
 }
 

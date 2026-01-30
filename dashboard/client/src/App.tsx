@@ -1,18 +1,37 @@
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Settings, Server, RefreshCw, Wrench } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { QueryClient, QueryClientProvider, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Settings, Server, RefreshCw, Wrench, Users, LogOut } from 'lucide-react'
 import CredentialsForm from './components/CredentialsForm'
 import ConfigForm from './components/ConfigForm'
 import InstanceList from './components/InstanceList'
 import SpinUpForm from './components/SpinUpForm'
 import SetupGuide from './components/SetupGuide'
+import ParticipantManager from './components/ParticipantManager'
+import AdminPasswordForm from './components/AdminPasswordForm'
+import OrphanedInstanceScanner from './components/OrphanedInstanceScanner'
+import AdminLoginPage from './components/auth/AdminLoginPage'
+import ParticipantLoginPage from './components/auth/ParticipantLoginPage'
+import ParticipantPortal from './components/portal/ParticipantPortal'
 import { api } from './lib/api'
+import { useAuth } from './hooks/useAuth'
 
-type Tab = 'instances' | 'settings' | 'setup'
+type Tab = 'instances' | 'participants' | 'settings' | 'setup'
+type Route = 'login' | 'portal' | 'portal-dashboard' | 'admin'
 
-function App() {
+// Create a query client outside of the component
+const queryClient = new QueryClient()
+
+function getRouteFromHash(): Route {
+  const hash = window.location.hash.slice(1) // Remove the '#'
+  if (hash === '/portal' || hash === '/portal/') return 'portal'
+  if (hash === '/portal/dashboard') return 'portal-dashboard'
+  if (hash === '/login' || hash === '/login/') return 'login'
+  return 'admin' // Default to admin dashboard
+}
+
+function AdminDashboard({ onLogout }: { onLogout: () => void }) {
   const [activeTab, setActiveTab] = useState<Tab>('instances')
-  const queryClient = useQueryClient()
+  const queryClientInner = useQueryClient()
 
   const { data: credentials } = useQuery({
     queryKey: ['credentials'],
@@ -29,14 +48,20 @@ function App() {
     queryKey: ['setup-status'],
     queryFn: api.getSetupStatus,
     enabled: credentials?.configured,
-    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchInterval: 30000,
+  })
+
+  const { data: participantsData } = useQuery({
+    queryKey: ['participants'],
+    queryFn: api.getParticipants,
   })
 
   const spinUpMutation = useMutation({
-    mutationFn: ({ count, extension }: { count: number; extension: string }) =>
-      api.spinUpInstances({ count, extension }),
+    mutationFn: ({ count, extension, autoAssignParticipants }: { count: number; extension: string; autoAssignParticipants?: boolean }) =>
+      api.spinUpInstances({ count, extension, autoAssignParticipants }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['instances'] })
+      queryClientInner.invalidateQueries({ queryKey: ['instances'] })
+      queryClientInner.invalidateQueries({ queryKey: ['participants'] })
     },
   })
 
@@ -65,6 +90,22 @@ function App() {
                 Instances
               </button>
               <button
+                onClick={() => setActiveTab('participants')}
+                className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                  activeTab === 'participants'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                Participants
+                {participantsData?.stats?.unassigned ? (
+                  <span className="bg-yellow-500 text-black text-xs px-1.5 py-0.5 rounded-full">
+                    {participantsData.stats.unassigned}
+                  </span>
+                ) : null}
+              </button>
+              <button
                 onClick={() => setActiveTab('setup')}
                 className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
                   activeTab === 'setup'
@@ -86,6 +127,13 @@ function App() {
                 <Settings className="w-4 h-4" />
                 Settings
               </button>
+              <button
+                onClick={onLogout}
+                className="px-4 py-2 rounded-lg flex items-center gap-2 bg-gray-700 text-gray-300 hover:bg-gray-600"
+                title="Logout"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
             </div>
           </div>
         </div>
@@ -96,9 +144,15 @@ function App() {
         {/* Settings Tab */}
         <div className={activeTab === 'settings' ? '' : 'hidden'}>
           <div className="space-y-8">
+            <AdminPasswordForm />
             <CredentialsForm />
             <ConfigForm />
           </div>
+        </div>
+
+        {/* Participants Tab */}
+        <div className={activeTab === 'participants' ? '' : 'hidden'}>
+          <ParticipantManager />
         </div>
 
         {/* Setup Tab */}
@@ -145,10 +199,11 @@ function App() {
               <>
                 {/* Spin Up Form */}
                 <SpinUpForm
-                  onSpinUp={(count, extension) => spinUpMutation.mutate({ count, extension })}
+                  onSpinUp={(count, extension, autoAssignParticipants) => spinUpMutation.mutate({ count, extension, autoAssignParticipants })}
                   isLoading={spinUpMutation.isPending}
                   setupStatus={setupStatus}
                   onGoToSetup={() => setActiveTab('setup')}
+                  unassignedParticipants={participantsData?.stats?.unassigned || 0}
                 />
 
                 {/* Instance List */}
@@ -159,7 +214,7 @@ function App() {
                       Instances ({instances.length})
                     </h2>
                     <button
-                      onClick={() => queryClient.invalidateQueries({ queryKey: ['instances'] })}
+                      onClick={() => queryClientInner.invalidateQueries({ queryKey: ['instances'] })}
                       className="text-gray-400 hover:text-white p-2 rounded-lg hover:bg-gray-700"
                       title="Refresh"
                     >
@@ -177,12 +232,97 @@ function App() {
                     <InstanceList instances={instances} />
                   )}
                 </div>
+
+                {/* Orphaned Instance Scanner */}
+                <OrphanedInstanceScanner />
               </>
             )}
           </div>
         </div>
       </main>
     </div>
+  )
+}
+
+function AppContent() {
+  const [route, setRoute] = useState<Route>(getRouteFromHash)
+  const auth = useAuth()
+
+  // Listen for hash changes
+  useEffect(() => {
+    const handleHashChange = () => {
+      setRoute(getRouteFromHash())
+    }
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  }, [])
+
+  // Handle login
+  const handleLogin = (token: string) => {
+    auth.login(token)
+    // Navigate based on user type
+    const user = auth.user
+    if (route === 'portal' || route === 'portal-dashboard') {
+      window.location.hash = '#/portal/dashboard'
+    } else {
+      window.location.hash = '#/'
+    }
+    // Force re-render
+    setRoute(getRouteFromHash())
+  }
+
+  // Handle logout
+  const handleLogout = () => {
+    auth.logout()
+    // Navigate to appropriate login page
+    if (route === 'portal-dashboard') {
+      window.location.hash = '#/portal'
+    } else {
+      window.location.hash = '#/login'
+    }
+    setRoute(getRouteFromHash())
+  }
+
+  // Participant portal routes
+  if (route === 'portal') {
+    if (auth.isAuthenticated && auth.isParticipant) {
+      window.location.hash = '#/portal/dashboard'
+      return null
+    }
+    return <ParticipantLoginPage onLogin={handleLogin} />
+  }
+
+  if (route === 'portal-dashboard') {
+    if (!auth.isAuthenticated || !auth.isParticipant) {
+      window.location.hash = '#/portal'
+      return null
+    }
+    return <ParticipantPortal user={auth.user!} onLogout={handleLogout} />
+  }
+
+  // Admin routes
+  if (route === 'login') {
+    if (auth.isAuthenticated && auth.isAdmin) {
+      window.location.hash = '#/'
+      return null
+    }
+    return <AdminLoginPage onLogin={handleLogin} />
+  }
+
+  // Admin dashboard (default route)
+  if (!auth.isAuthenticated || !auth.isAdmin) {
+    window.location.hash = '#/login'
+    return null
+  }
+
+  return <AdminDashboard onLogout={handleLogout} />
+}
+
+function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AppContent />
+    </QueryClientProvider>
   )
 }
 

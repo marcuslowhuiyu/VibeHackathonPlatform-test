@@ -260,8 +260,7 @@ function AppContent() {
   // Handle login
   const handleLogin = (token: string) => {
     auth.login(token)
-    // Navigate based on user type
-    const user = auth.user
+    // Navigate based on current route
     if (route === 'portal' || route === 'portal-dashboard') {
       window.location.hash = '#/portal/dashboard'
     } else {

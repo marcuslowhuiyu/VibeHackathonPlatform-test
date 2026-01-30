@@ -136,15 +136,6 @@ jobs:
             echo "Created HTTP listener"
           fi
 
-      - name: Check if ECS service exists
-        id: check-service
-        run: |
-          if aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} --query 'services[0].status' --output text 2>/dev/null | grep -q "ACTIVE"; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Register new task definition
         id: task-def
         env:
@@ -215,8 +206,31 @@ jobs:
           TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://task-def.json --query 'taskDefinition.taskDefinitionArn' --output text)
           echo "task_def_arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
 
-      - name: Create ECS service if not exists
-        if: steps.check-service.outputs.exists == 'false'
+      - name: Delete existing ECS service
+        run: |
+          # Check if service exists and delete it
+          SERVICE_STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+
+          if [ "$SERVICE_STATUS" == "ACTIVE" ]; then
+            echo "Deleting existing service..."
+            aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE }} --force
+
+            # Wait for service to be fully deleted
+            echo "Waiting for service to be deleted..."
+            while true; do
+              STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+              if [ "$STATUS" == "INACTIVE" ] || [ "$STATUS" == "MISSING" ]; then
+                echo "Service deleted successfully"
+                break
+              fi
+              echo "Current status: $STATUS - waiting..."
+              sleep 10
+            done
+          else
+            echo "No active service found, proceeding with creation"
+          fi
+
+      - name: Create ECS service
         run: |
           # Create the ECS service with ALB integration
           aws ecs create-service \
@@ -229,15 +243,6 @@ jobs:
             --load-balancers "targetGroupArn=${{ steps.infra.outputs.tg_arn }},containerName=${{ env.CONTAINER_NAME }},containerPort=3001" \
             --deployment-configuration "minimumHealthyPercent=0,maximumPercent=200" \
             --health-check-grace-period-seconds 60
-
-      - name: Update ECS service
-        if: steps.check-service.outputs.exists == 'true'
-        run: |
-          aws ecs update-service \
-            --cluster ${{ env.ECS_CLUSTER }} \
-            --service ${{ env.ECS_SERVICE }} \
-            --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
-            --force-new-deployment
 
       - name: Setup CloudFront Distribution
         id: cloudfront

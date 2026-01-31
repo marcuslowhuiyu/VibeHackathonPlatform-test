@@ -7,7 +7,7 @@ on:
       - 'dashboard/**'
       - 'cline-setup/**'
       - '.github/workflows/deploy-dashboard.yml'
-  workflow_dispatch: # Allow manual trigger from GitHub UI
+  workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
@@ -18,13 +18,18 @@ env:
   CONTAINER_NAME: vibe-dashboard
 
 jobs:
-  deploy:
-    name: Build and Deploy
+  # Fast job: Only build what changed
+  build:
+    name: Build Images
     runs-on: ubuntu-latest
+    outputs:
+      dashboard_image: ${{ steps.build-dashboard.outputs.image }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Need for change detection
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -37,358 +42,206 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Create ECR repository if not exists
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create ECR repositories if not exist
         run: |
           aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} 2>/dev/null || \
-          aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }}
-
-      - name: Build, tag, and push Dashboard image to ECR
-        id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          cd dashboard
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
-
-      - name: Create Coding Lab ECR repository if not exists
-        run: |
+            aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }}
           aws ecr describe-repositories --repository-names ${{ env.ECR_CODING_LAB }} 2>/dev/null || \
-          aws ecr create-repository --repository-name ${{ env.ECR_CODING_LAB }}
+            aws ecr create-repository --repository-name ${{ env.ECR_CODING_LAB }}
 
-      - name: Build, tag, and push Coding Lab image to ECR
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+      - name: Build and push Dashboard image
+        id: build-dashboard
+        uses: docker/build-push-action@v5
+        with:
+          context: ./dashboard
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Check if coding lab changed
+        id: changes
         run: |
-          cd cline-setup
-          echo "Building coding lab image with Continue AI..."
-          docker build --build-arg AI_EXTENSION=continue -t $ECR_REGISTRY/$ECR_CODING_LAB:continue .
-          docker tag $ECR_REGISTRY/$ECR_CODING_LAB:continue $ECR_REGISTRY/$ECR_CODING_LAB:latest
-          echo "Pushing to ECR..."
-          docker push $ECR_REGISTRY/$ECR_CODING_LAB:continue
-          docker push $ECR_REGISTRY/$ECR_CODING_LAB:latest
-          echo "Coding lab image pushed: $ECR_REGISTRY/$ECR_CODING_LAB:latest"
+          if git diff --name-only HEAD~1 HEAD | grep -q "^cline-setup/"; then
+            echo "coding_lab_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "coding_lab_changed=false" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Setup Infrastructure (VPC, ALB, Target Group)
+      - name: Build and push Coding Lab image (only if changed)
+        if: steps.changes.outputs.coding_lab_changed == 'true' || github.event_name == 'workflow_dispatch'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./cline-setup
+          push: true
+          build-args: AI_EXTENSION=continue
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:continue
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to ECS
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get infrastructure info
         id: infra
         run: |
           # Get VPC
-          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=vibe-vpc" --query 'Vpcs[0].VpcId' --output text)
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=vibe-vpc" --query 'Vpcs[0].VpcId' --output text 2>/dev/null)
           if [ "$VPC_ID" == "None" ] || [ -z "$VPC_ID" ]; then
             VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text)
           fi
           echo "vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
 
-          # Get subnets (need at least 2 in different AZs for ALB)
           SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[*].SubnetId' --output text | tr '\t' ',')
           echo "subnet_ids=$SUBNET_IDS" >> $GITHUB_OUTPUT
 
-          # Create or get ALB security group
+          # Get existing security groups
+          ECS_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=vibe-dashboard-ecs-sg" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+          echo "ecs_sg_id=$ECS_SG_ID" >> $GITHUB_OUTPUT
+
+          # Get target group
+          TG_ARN=$(aws elbv2 describe-target-groups --names vibe-dashboard-tg --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "")
+          echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
+
+          # Get EFS
+          EFS_ID=$(aws efs describe-file-systems --creation-token vibe-dashboard-efs --query "FileSystems[0].FileSystemId" --output text 2>/dev/null || echo "")
+          echo "efs_id=$EFS_ID" >> $GITHUB_OUTPUT
+
+          AP_ID=$(aws efs describe-access-points --file-system-id $EFS_ID --query "AccessPoints[0].AccessPointId" --output text 2>/dev/null || echo "")
+          echo "ap_id=$AP_ID" >> $GITHUB_OUTPUT
+
+          # Check if first-time setup needed
+          if [ -z "$ECS_SG_ID" ] || [ "$ECS_SG_ID" == "None" ] || [ -z "$TG_ARN" ] || [ "$TG_ARN" == "None" ]; then
+            echo "needs_setup=true" >> $GITHUB_OUTPUT
+          else
+            echo "needs_setup=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout for first-time setup
+        if: steps.infra.outputs.needs_setup == 'true'
+        uses: actions/checkout@v4
+
+      - name: First-time infrastructure setup
+        if: steps.infra.outputs.needs_setup == 'true'
+        id: setup
+        run: |
+          VPC_ID="${{ steps.infra.outputs.vpc_id }}"
+          SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
+
+          # Create ALB security group
           ALB_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=vibe-dashboard-alb-sg" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
           if [ "$ALB_SG_ID" == "None" ] || [ -z "$ALB_SG_ID" ]; then
-            ALB_SG_ID=$(aws ec2 create-security-group --group-name vibe-dashboard-alb-sg --description "Vibe Dashboard ALB Security Group" --vpc-id $VPC_ID --query 'GroupId' --output text)
+            ALB_SG_ID=$(aws ec2 create-security-group --group-name vibe-dashboard-alb-sg --description "Vibe Dashboard ALB" --vpc-id $VPC_ID --query 'GroupId' --output text)
             aws ec2 authorize-security-group-ingress --group-id $ALB_SG_ID --protocol tcp --port 80 --cidr 0.0.0.0/0
             aws ec2 authorize-security-group-ingress --group-id $ALB_SG_ID --protocol tcp --port 443 --cidr 0.0.0.0/0
           fi
           echo "alb_sg_id=$ALB_SG_ID" >> $GITHUB_OUTPUT
 
-          # Create or get ECS task security group
+          # Create ECS security group
           ECS_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=vibe-dashboard-ecs-sg" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
           if [ "$ECS_SG_ID" == "None" ] || [ -z "$ECS_SG_ID" ]; then
-            ECS_SG_ID=$(aws ec2 create-security-group --group-name vibe-dashboard-ecs-sg --description "Vibe Dashboard ECS Security Group" --vpc-id $VPC_ID --query 'GroupId' --output text)
-            # Allow traffic from ALB only
+            ECS_SG_ID=$(aws ec2 create-security-group --group-name vibe-dashboard-ecs-sg --description "Vibe Dashboard ECS" --vpc-id $VPC_ID --query 'GroupId' --output text)
             aws ec2 authorize-security-group-ingress --group-id $ECS_SG_ID --protocol tcp --port 3001 --source-group $ALB_SG_ID
           fi
           echo "ecs_sg_id=$ECS_SG_ID" >> $GITHUB_OUTPUT
 
-          # Create or get EFS security group
+          # Create EFS security group
           EFS_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=vibe-dashboard-efs-sg" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
           if [ "$EFS_SG_ID" == "None" ] || [ -z "$EFS_SG_ID" ]; then
-            EFS_SG_ID=$(aws ec2 create-security-group --group-name vibe-dashboard-efs-sg --description "Vibe Dashboard EFS Security Group" --vpc-id $VPC_ID --query 'GroupId' --output text)
-            # Allow NFS from ECS tasks
+            EFS_SG_ID=$(aws ec2 create-security-group --group-name vibe-dashboard-efs-sg --description "Vibe Dashboard EFS" --vpc-id $VPC_ID --query 'GroupId' --output text)
             aws ec2 authorize-security-group-ingress --group-id $EFS_SG_ID --protocol tcp --port 2049 --source-group $ECS_SG_ID
           fi
-          echo "efs_sg_id=$EFS_SG_ID" >> $GITHUB_OUTPUT
 
-          # Create or get ALB
+          # Create ALB
           ALB_ARN=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
-          if [ "$ALB_ARN" == "None" ] || [ -z "$ALB_ARN" ]; then
-            # Convert comma-separated to space-separated for ALB creation
+          if [ "$ALB_ARN" == "None" ]; then
             SUBNET_LIST=$(echo $SUBNET_IDS | tr ',' ' ')
-            ALB_ARN=$(aws elbv2 create-load-balancer \
-              --name vibe-dashboard-alb \
-              --subnets $SUBNET_LIST \
-              --security-groups $ALB_SG_ID \
-              --scheme internet-facing \
-              --type application \
-              --query 'LoadBalancers[0].LoadBalancerArn' \
-              --output text)
-            echo "Created new ALB: $ALB_ARN"
+            ALB_ARN=$(aws elbv2 create-load-balancer --name vibe-dashboard-alb --subnets $SUBNET_LIST --security-groups $ALB_SG_ID --scheme internet-facing --type application --query 'LoadBalancers[0].LoadBalancerArn' --output text)
           fi
-          echo "alb_arn=$ALB_ARN" >> $GITHUB_OUTPUT
 
-          # Get ALB DNS name
           ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].DNSName' --output text)
           echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
 
-          # Create or get target group
+          # Create target group
           TG_ARN=$(aws elbv2 describe-target-groups --names vibe-dashboard-tg --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
-          if [ "$TG_ARN" == "None" ] || [ -z "$TG_ARN" ]; then
-            TG_ARN=$(aws elbv2 create-target-group \
-              --name vibe-dashboard-tg \
-              --protocol HTTP \
-              --port 3001 \
-              --vpc-id $VPC_ID \
-              --target-type ip \
-              --health-check-path /api/health \
-              --health-check-interval-seconds 30 \
-              --healthy-threshold-count 2 \
-              --unhealthy-threshold-count 3 \
-              --query 'TargetGroups[0].TargetGroupArn' \
-              --output text)
-            echo "Created new target group: $TG_ARN"
+          if [ "$TG_ARN" == "None" ]; then
+            TG_ARN=$(aws elbv2 create-target-group --name vibe-dashboard-tg --protocol HTTP --port 3001 --vpc-id $VPC_ID --target-type ip --health-check-path /api/health --query 'TargetGroups[0].TargetGroupArn' --output text)
           fi
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
 
-          # Create HTTP listener if not exists
+          # Create listener
           LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text 2>/dev/null)
           if [ -z "$LISTENER_ARN" ] || [ "$LISTENER_ARN" == "None" ]; then
-            aws elbv2 create-listener \
-              --load-balancer-arn $ALB_ARN \
-              --protocol HTTP \
-              --port 80 \
-              --default-actions Type=forward,TargetGroupArn=$TG_ARN
-            echo "Created HTTP listener"
+            aws elbv2 create-listener --load-balancer-arn $ALB_ARN --protocol HTTP --port 80 --default-actions Type=forward,TargetGroupArn=$TG_ARN
           fi
 
-      - name: Setup EFS for persistent storage
-        id: efs
-        run: |
-          VPC_ID="${{ steps.infra.outputs.vpc_id }}"
-          SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
-          EFS_SG_ID="${{ steps.infra.outputs.efs_sg_id }}"
-
-          # Create or get EFS file system (using creation-token to find existing)
+          # Create EFS
           EFS_ID=$(aws efs describe-file-systems --creation-token vibe-dashboard-efs --query "FileSystems[0].FileSystemId" --output text 2>/dev/null || echo "None")
           if [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ]; then
-            echo "Creating new EFS file system..."
-            EFS_ID=$(aws efs create-file-system \
-              --creation-token vibe-dashboard-efs \
-              --performance-mode generalPurpose \
-              --throughput-mode bursting \
-              --encrypted \
-              --query 'FileSystemId' --output text)
-
-            # Wait for EFS to be available
-            echo "Waiting for EFS to be available..."
-            while [ "$(aws efs describe-file-systems --file-system-id $EFS_ID --query 'FileSystems[0].LifeCycleState' --output text)" != "available" ]; do
-              sleep 5
-            done
-            echo "EFS is available: $EFS_ID"
-          else
-            echo "Using existing EFS: $EFS_ID"
+            EFS_ID=$(aws efs create-file-system --creation-token vibe-dashboard-efs --performance-mode generalPurpose --encrypted --query 'FileSystemId' --output text)
+            aws efs wait file-system-available --file-system-id $EFS_ID
           fi
           echo "efs_id=$EFS_ID" >> $GITHUB_OUTPUT
 
-          # Create mount targets in each subnet
+          # Create mount targets
           for SUBNET in $(echo $SUBNET_IDS | tr ',' ' '); do
-            MT_ID=$(aws efs describe-mount-targets --file-system-id $EFS_ID --query "MountTargets[?SubnetId=='$SUBNET'].MountTargetId" --output text 2>/dev/null)
-            if [ -z "$MT_ID" ] || [ "$MT_ID" == "None" ]; then
-              echo "Creating mount target in subnet $SUBNET..."
-              aws efs create-mount-target \
-                --file-system-id $EFS_ID \
-                --subnet-id $SUBNET \
-                --security-groups $EFS_SG_ID || true
-            else
-              echo "Mount target already exists in subnet $SUBNET"
-            fi
+            aws efs create-mount-target --file-system-id $EFS_ID --subnet-id $SUBNET --security-groups $EFS_SG_ID 2>/dev/null || true
           done
 
-          # Wait for mount targets to be available
-          echo "Waiting for mount targets..."
-          sleep 30
-
-          # Create or get access point
+          # Create access point
           AP_ID=$(aws efs describe-access-points --file-system-id $EFS_ID --query "AccessPoints[0].AccessPointId" --output text 2>/dev/null)
           if [ -z "$AP_ID" ] || [ "$AP_ID" == "None" ]; then
-            echo "Creating access point..."
-            AP_ID=$(aws efs create-access-point \
-              --file-system-id $EFS_ID \
-              --posix-user Uid=1000,Gid=1000 \
-              --root-directory "Path=/dashboard-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=755}" \
-              --query 'AccessPointId' --output text)
-            echo "Created access point: $AP_ID"
-          else
-            echo "Using existing access point: $AP_ID"
+            AP_ID=$(aws efs create-access-point --file-system-id $EFS_ID --posix-user Uid=1000,Gid=1000 --root-directory "Path=/dashboard-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=755}" --query 'AccessPointId' --output text)
           fi
           echo "ap_id=$AP_ID" >> $GITHUB_OUTPUT
 
-      - name: Setup CodeBuild for remote builds
-        run: |
+          # Create IAM roles
           AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          EFS_ID="${{ steps.efs.outputs.efs_id }}"
-          VPC_ID="${{ steps.infra.outputs.vpc_id }}"
-          SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
-          ECS_SG_ID="${{ steps.infra.outputs.ecs_sg_id }}"
 
-          # Get first subnet for CodeBuild
-          FIRST_SUBNET=$(echo $SUBNET_IDS | cut -d',' -f1)
-
-          # Create CodeBuild service role if not exists
-          ROLE_EXISTS=$(aws iam get-role --role-name codebuild-vibe-service-role 2>/dev/null && echo "yes" || echo "no")
-          if [ "$ROLE_EXISTS" == "no" ]; then
-            echo "Creating CodeBuild service role..."
-            cat > codebuild-trust-policy.json << 'EOF'
-          {
-            "Version": "2012-10-17",
-            "Statement": [{
-              "Effect": "Allow",
-              "Principal": {"Service": "codebuild.amazonaws.com"},
-              "Action": "sts:AssumeRole"
-            }]
+          aws iam get-role --role-name ecsTaskRole 2>/dev/null || {
+            aws iam create-role --role-name ecsTaskRole --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
           }
-          EOF
-            aws iam create-role --role-name codebuild-vibe-service-role --assume-role-policy-document file://codebuild-trust-policy.json
 
-            # Attach policies for ECR, CloudWatch Logs, VPC, and EFS
-            aws iam attach-role-policy --role-name codebuild-vibe-service-role --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
-            aws iam attach-role-policy --role-name codebuild-vibe-service-role --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
-            aws iam attach-role-policy --role-name codebuild-vibe-service-role --policy-arn arn:aws:iam::aws:policy/AmazonElasticFileSystemReadOnlyAccess
+          aws iam put-role-policy --role-name ecsTaskRole --policy-name efs-access --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"elasticfilesystem:ClientMount\",\"elasticfilesystem:ClientWrite\",\"elasticfilesystem:ClientRootAccess\"],\"Resource\":\"arn:aws:elasticfilesystem:${{ env.AWS_REGION }}:${AWS_ACCOUNT_ID}:file-system/${EFS_ID}\"}]}"
 
-            # Add VPC permissions for CodeBuild
-            cat > codebuild-vpc-policy.json << EOF
-          {
-            "Version": "2012-10-17",
-            "Statement": [{
-              "Effect": "Allow",
-              "Action": [
-                "ec2:CreateNetworkInterface",
-                "ec2:DescribeNetworkInterfaces",
-                "ec2:DeleteNetworkInterface",
-                "ec2:DescribeSubnets",
-                "ec2:DescribeSecurityGroups",
-                "ec2:DescribeDhcpOptions",
-                "ec2:DescribeVpcs",
-                "ec2:CreateNetworkInterfacePermission"
-              ],
-              "Resource": "*"
-            }]
-          }
-          EOF
-            aws iam put-role-policy --role-name codebuild-vibe-service-role --policy-name vpc-access --policy-document file://codebuild-vpc-policy.json
-
-            echo "CodeBuild service role created"
-            sleep 10  # Wait for role to propagate
-          fi
-
-          # Create CodeBuild project if not exists
-          PROJECT_EXISTS=$(aws codebuild batch-get-projects --names vibe-coding-lab-builder --query 'projects[0].name' --output text 2>/dev/null || echo "None")
-          if [ "$PROJECT_EXISTS" == "None" ] || [ -z "$PROJECT_EXISTS" ]; then
-            echo "Creating CodeBuild project with EFS access..."
-
-            # Create project config JSON
-            cat > codebuild-project.json << EOF
-          {
-            "name": "vibe-coding-lab-builder",
-            "description": "Builds the Vibe Coding Lab Docker image from EFS",
-            "source": {
-              "type": "NO_SOURCE",
-              "buildspec": "version: 0.2\nphases:\n  pre_build:\n    commands:\n      - echo Logging in to Amazon ECR...\n      - aws ecr get-login-password --region \$AWS_DEFAULT_REGION | docker login --username AWS --password-stdin \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com\n      - echo Copying files from EFS...\n      - mkdir -p /tmp/build\n      - cp -r /mnt/efs/cline-setup/* /tmp/build/ 2>/dev/null || echo 'Using default files'\n      - ls -la /tmp/build/\n  build:\n    commands:\n      - echo Building the Docker image...\n      - cd /tmp/build\n      - docker build --build-arg AI_EXTENSION=continue -t vibe-coding-lab:continue .\n      - docker tag vibe-coding-lab:continue \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue\n      - docker tag vibe-coding-lab:continue \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest\n  post_build:\n    commands:\n      - echo Pushing the Docker image...\n      - docker push \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue\n      - docker push \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest\n      - echo Build completed"
-            },
-            "artifacts": {
-              "type": "NO_ARTIFACTS"
-            },
-            "environment": {
-              "type": "LINUX_CONTAINER",
-              "computeType": "BUILD_GENERAL1_MEDIUM",
-              "image": "aws/codebuild/amazonlinux2-x86_64-standard:5.0",
-              "privilegedMode": true,
-              "environmentVariables": [
-                {"name": "AWS_ACCOUNT_ID", "value": "${AWS_ACCOUNT_ID}"},
-                {"name": "AWS_DEFAULT_REGION", "value": "${{ env.AWS_REGION }}"}
-              ]
-            },
-            "serviceRole": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/codebuild-vibe-service-role",
-            "vpcConfig": {
-              "vpcId": "${VPC_ID}",
-              "subnets": ["${FIRST_SUBNET}"],
-              "securityGroupIds": ["${ECS_SG_ID}"]
-            },
-            "fileSystemLocations": [
-              {
-                "type": "EFS",
-                "location": "${EFS_ID}.efs.${{ env.AWS_REGION }}.amazonaws.com:/",
-                "mountPoint": "/mnt/efs",
-                "identifier": "efs_mount",
-                "mountOptions": "nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2"
-              }
-            ]
-          }
-          EOF
-
-            aws codebuild create-project --cli-input-json file://codebuild-project.json
-            echo "CodeBuild project created with EFS mount"
-          else
-            echo "CodeBuild project already exists"
-          fi
-
-      - name: Setup ECS Task Role for EFS
+      - name: Get ECR registry
+        id: ecr
         run: |
-          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          EFS_ID="${{ steps.efs.outputs.efs_id }}"
+          REGISTRY=$(aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} --query 'repositories[0].repositoryUri' --output text | sed 's|/.*||')
+          echo "registry=$REGISTRY" >> $GITHUB_OUTPUT
 
-          # Check if task role exists
-          TASK_ROLE_EXISTS=$(aws iam get-role --role-name ecsTaskRole 2>/dev/null && echo "yes" || echo "no")
-
-          if [ "$TASK_ROLE_EXISTS" == "no" ]; then
-            echo "Creating ecsTaskRole..."
-            cat > trust-policy.json << 'EOF'
-          {
-            "Version": "2012-10-17",
-            "Statement": [{
-              "Effect": "Allow",
-              "Principal": {"Service": "ecs-tasks.amazonaws.com"},
-              "Action": "sts:AssumeRole"
-            }]
-          }
-          EOF
-            aws iam create-role --role-name ecsTaskRole --assume-role-policy-document file://trust-policy.json
-          fi
-
-          # Attach EFS policy
-          echo "Attaching EFS access policy..."
-          cat > efs-policy.json << EOF
-          {
-            "Version": "2012-10-17",
-            "Statement": [{
-              "Effect": "Allow",
-              "Action": [
-                "elasticfilesystem:ClientMount",
-                "elasticfilesystem:ClientWrite",
-                "elasticfilesystem:ClientRootAccess"
-              ],
-              "Resource": "arn:aws:elasticfilesystem:${{ env.AWS_REGION }}:${AWS_ACCOUNT_ID}:file-system/${EFS_ID}"
-            }]
-          }
-          EOF
-          aws iam put-role-policy --role-name ecsTaskRole --policy-name efs-access --policy-document file://efs-policy.json
-
-      - name: Register new task definition
+      - name: Register task definition
         id: task-def
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
         run: |
-          # Get AWS account ID
           AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          EFS_ID="${{ steps.efs.outputs.efs_id }}"
-          AP_ID="${{ steps.efs.outputs.ap_id }}"
+          ECR_REGISTRY="${{ steps.ecr.outputs.registry }}"
 
-          # Create task definition JSON with EFS volume
+          # Use setup outputs if first-time, otherwise use infra outputs
+          if [ "${{ steps.infra.outputs.needs_setup }}" == "true" ]; then
+            EFS_ID="${{ steps.setup.outputs.efs_id }}"
+            AP_ID="${{ steps.setup.outputs.ap_id }}"
+          else
+            EFS_ID="${{ steps.infra.outputs.efs_id }}"
+            AP_ID="${{ steps.infra.outputs.ap_id }}"
+          fi
+
           cat > task-def.json << EOF
           {
             "family": "vibe-dashboard",
@@ -398,217 +251,97 @@ jobs:
             "memory": "1024",
             "executionRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
             "taskRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ecsTaskRole",
-            "containerDefinitions": [
-              {
-                "name": "${{ env.CONTAINER_NAME }}",
-                "image": "${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:${IMAGE_TAG}",
-                "essential": true,
-                "portMappings": [
-                  {
-                    "containerPort": 3001,
-                    "protocol": "tcp"
-                  }
-                ],
-                "environment": [
-                  {"name": "NODE_ENV", "value": "production"},
-                  {"name": "PORT", "value": "3001"},
-                  {"name": "DATA_DIR", "value": "/mnt/efs/data"}
-                ],
-                "mountPoints": [
-                  {
-                    "sourceVolume": "efs-data",
-                    "containerPath": "/mnt/efs/data",
-                    "readOnly": false
-                  }
-                ],
-                "logConfiguration": {
-                  "logDriver": "awslogs",
-                  "options": {
-                    "awslogs-group": "/ecs/vibe-dashboard",
-                    "awslogs-region": "${{ env.AWS_REGION }}",
-                    "awslogs-stream-prefix": "ecs",
-                    "awslogs-create-group": "true"
-                  }
-                },
-                "healthCheck": {
-                  "command": ["CMD-SHELL", "wget -q --spider http://localhost:3001/api/health || exit 1"],
-                  "interval": 30,
-                  "timeout": 5,
-                  "retries": 3,
-                  "startPeriod": 60
+            "containerDefinitions": [{
+              "name": "${{ env.CONTAINER_NAME }}",
+              "image": "${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}",
+              "essential": true,
+              "portMappings": [{"containerPort": 3001, "protocol": "tcp"}],
+              "environment": [
+                {"name": "NODE_ENV", "value": "production"},
+                {"name": "PORT", "value": "3001"},
+                {"name": "DATA_DIR", "value": "/mnt/efs/data"}
+              ],
+              "mountPoints": [{"sourceVolume": "efs-data", "containerPath": "/mnt/efs/data", "readOnly": false}],
+              "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                  "awslogs-group": "/ecs/vibe-dashboard",
+                  "awslogs-region": "${{ env.AWS_REGION }}",
+                  "awslogs-stream-prefix": "ecs",
+                  "awslogs-create-group": "true"
                 }
+              },
+              "healthCheck": {
+                "command": ["CMD-SHELL", "wget -q --spider http://localhost:3001/api/health || exit 1"],
+                "interval": 30, "timeout": 5, "retries": 3, "startPeriod": 60
               }
-            ],
-            "volumes": [
-              {
-                "name": "efs-data",
-                "efsVolumeConfiguration": {
-                  "fileSystemId": "${EFS_ID}",
-                  "transitEncryption": "ENABLED",
-                  "authorizationConfig": {
-                    "accessPointId": "${AP_ID}",
-                    "iam": "ENABLED"
-                  }
-                }
+            }],
+            "volumes": [{
+              "name": "efs-data",
+              "efsVolumeConfiguration": {
+                "fileSystemId": "${EFS_ID}",
+                "transitEncryption": "ENABLED",
+                "authorizationConfig": {"accessPointId": "${AP_ID}", "iam": "ENABLED"}
               }
-            ]
+            }]
           }
           EOF
 
-          # Register the task definition
           TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://task-def.json --query 'taskDefinition.taskDefinitionArn' --output text)
           echo "task_def_arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
 
-      - name: Delete existing ECS service
+      - name: Deploy to ECS (update or create service)
         run: |
-          # Check if service exists and delete it
+          # Use setup outputs if first-time, otherwise use infra outputs
+          if [ "${{ steps.infra.outputs.needs_setup }}" == "true" ]; then
+            ECS_SG_ID="${{ steps.setup.outputs.ecs_sg_id }}"
+            TG_ARN="${{ steps.setup.outputs.tg_arn }}"
+          else
+            ECS_SG_ID="${{ steps.infra.outputs.ecs_sg_id }}"
+            TG_ARN="${{ steps.infra.outputs.tg_arn }}"
+          fi
+          SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
+
+          # Check if service exists
           SERVICE_STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
 
           if [ "$SERVICE_STATUS" == "ACTIVE" ]; then
-            echo "Deleting existing service..."
-            aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE }} --force
-
-            # Wait for service to be fully deleted
-            echo "Waiting for service to be deleted..."
-            while true; do
-              STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
-              if [ "$STATUS" == "INACTIVE" ] || [ "$STATUS" == "MISSING" ]; then
-                echo "Service deleted successfully"
-                break
-              fi
-              echo "Current status: $STATUS - waiting..."
-              sleep 10
-            done
+            echo "Updating existing service..."
+            aws ecs update-service \
+              --cluster ${{ env.ECS_CLUSTER }} \
+              --service ${{ env.ECS_SERVICE }} \
+              --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
+              --force-new-deployment
           else
-            echo "No active service found, proceeding with creation"
+            echo "Creating new service..."
+            # Delete inactive service if exists
+            aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE }} --force 2>/dev/null || true
+            sleep 5
+
+            aws ecs create-service \
+              --cluster ${{ env.ECS_CLUSTER }} \
+              --service-name ${{ env.ECS_SERVICE }} \
+              --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
+              --desired-count 1 \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_IDS],securityGroups=[$ECS_SG_ID],assignPublicIp=ENABLED}" \
+              --load-balancers "targetGroupArn=$TG_ARN,containerName=${{ env.CONTAINER_NAME }},containerPort=3001" \
+              --deployment-configuration "minimumHealthyPercent=0,maximumPercent=200" \
+              --health-check-grace-period-seconds 60
           fi
-
-      - name: Create ECS service
-        run: |
-          # Create the ECS service with ALB integration
-          aws ecs create-service \
-            --cluster ${{ env.ECS_CLUSTER }} \
-            --service-name ${{ env.ECS_SERVICE }} \
-            --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
-            --desired-count 1 \
-            --launch-type FARGATE \
-            --network-configuration "awsvpcConfiguration={subnets=[${{ steps.infra.outputs.subnet_ids }}],securityGroups=[${{ steps.infra.outputs.ecs_sg_id }}],assignPublicIp=ENABLED}" \
-            --load-balancers "targetGroupArn=${{ steps.infra.outputs.tg_arn }},containerName=${{ env.CONTAINER_NAME }},containerPort=3001" \
-            --deployment-configuration "minimumHealthyPercent=0,maximumPercent=200" \
-            --health-check-grace-period-seconds 60
-
-      - name: Setup CloudFront Distribution
-        id: cloudfront
-        run: |
-          ALB_DNS="${{ steps.infra.outputs.alb_dns }}"
-
-          # Check if CloudFront distribution exists for this ALB
-          EXISTING_DIST=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[0].DomainName=='$ALB_DNS'].Id" --output text 2>/dev/null || echo "")
-
-          if [ -n "$EXISTING_DIST" ] && [ "$EXISTING_DIST" != "None" ]; then
-            echo "CloudFront distribution already exists: $EXISTING_DIST"
-            CF_DOMAIN=$(aws cloudfront get-distribution --id $EXISTING_DIST --query 'Distribution.DomainName' --output text)
-            echo "cf_domain=$CF_DOMAIN" >> $GITHUB_OUTPUT
-            echo "cf_id=$EXISTING_DIST" >> $GITHUB_OUTPUT
-          else
-            # Create CloudFront distribution
-            CALLER_REF="vibe-dashboard-$(date +%s)"
-
-            cat > cf-config.json << EOF
-          {
-            "CallerReference": "$CALLER_REF",
-            "Comment": "Vibe Dashboard HTTPS",
-            "Enabled": true,
-            "Origins": {
-              "Quantity": 1,
-              "Items": [
-                {
-                  "Id": "alb-origin",
-                  "DomainName": "$ALB_DNS",
-                  "CustomOriginConfig": {
-                    "HTTPPort": 80,
-                    "HTTPSPort": 443,
-                    "OriginProtocolPolicy": "http-only",
-                    "OriginSslProtocols": {
-                      "Quantity": 1,
-                      "Items": ["TLSv1.2"]
-                    }
-                  }
-                }
-              ]
-            },
-            "DefaultCacheBehavior": {
-              "TargetOriginId": "alb-origin",
-              "ViewerProtocolPolicy": "redirect-to-https",
-              "AllowedMethods": {
-                "Quantity": 7,
-                "Items": ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
-                "CachedMethods": {
-                  "Quantity": 2,
-                  "Items": ["GET", "HEAD"]
-                }
-              },
-              "ForwardedValues": {
-                "QueryString": true,
-                "Cookies": {
-                  "Forward": "all"
-                },
-                "Headers": {
-                  "Quantity": 3,
-                  "Items": ["Authorization", "Origin", "Host"]
-                }
-              },
-              "MinTTL": 0,
-              "DefaultTTL": 0,
-              "MaxTTL": 0,
-              "Compress": true
-            },
-            "PriceClass": "PriceClass_100",
-            "ViewerCertificate": {
-              "CloudFrontDefaultCertificate": true
-            }
-          }
-          EOF
-
-            CF_RESULT=$(aws cloudfront create-distribution --distribution-config file://cf-config.json)
-            CF_ID=$(echo $CF_RESULT | jq -r '.Distribution.Id')
-            CF_DOMAIN=$(echo $CF_RESULT | jq -r '.Distribution.DomainName')
-
-            echo "Created CloudFront distribution: $CF_ID"
-            echo "cf_domain=$CF_DOMAIN" >> $GITHUB_OUTPUT
-            echo "cf_id=$CF_ID" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Wait for service stability
-        run: |
-          echo "Waiting for service to stabilize..."
-          aws ecs wait services-stable --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} || true
 
       - name: Output URLs
         run: |
+          ALB_DNS=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].DNSName' --output text)
+          CF_DOMAIN=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[0].DomainName=='$ALB_DNS'].DomainName" --output text 2>/dev/null || echo "")
+
           echo ""
           echo "========================================"
           echo "  DEPLOYMENT COMPLETE!"
           echo "========================================"
           echo ""
-          echo "  HTTPS URLs (Recommended):"
-          echo "  -------------------------"
-          echo "  Admin Login:        https://${{ steps.cloudfront.outputs.cf_domain }}/#/login"
-          echo "  Participant Portal: https://${{ steps.cloudfront.outputs.cf_domain }}/#/portal"
-          echo ""
-          echo "  HTTP URLs (Direct ALB - not secure):"
-          echo "  ------------------------------------"
-          echo "  Admin Login:        http://${{ steps.infra.outputs.alb_dns }}/#/login"
-          echo "  Participant Portal: http://${{ steps.infra.outputs.alb_dns }}/#/portal"
-          echo ""
-          echo "  CloudFront ID: ${{ steps.cloudfront.outputs.cf_id }}"
-          echo ""
-          echo "  NOTE: CloudFront may take 5-15 minutes to fully deploy."
-          echo "        Use the ALB URL initially if CloudFront isn't ready."
-          echo ""
-          echo "  To add a custom domain later:"
-          echo "  1. Request ACM certificate in us-east-1"
-          echo "  2. Add domain to CloudFront alternate domain names"
-          echo "  3. Create Route 53 alias record pointing to CloudFront"
-          echo ""
+          if [ -n "$CF_DOMAIN" ] && [ "$CF_DOMAIN" != "None" ]; then
+            echo "  HTTPS: https://$CF_DOMAIN"
+          fi
+          echo "  HTTP:  http://$ALB_DNS"
           echo "========================================"

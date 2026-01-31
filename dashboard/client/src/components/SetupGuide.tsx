@@ -834,32 +834,28 @@ export default function SetupGuide() {
                   <Box className="w-8 h-8 text-blue-400" />
                   <div>
                     <h4 className="font-medium">Docker Desktop</h4>
-                    <p className="text-sm text-gray-400">Required to build and run containers</p>
+                    <p className="text-sm text-gray-400">Only needed for local development</p>
                   </div>
                 </div>
-                <a
-                  href="https://www.docker.com/products/docker-desktop/"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-lg text-sm flex items-center gap-2"
-                >
-                  Download
-                  <ExternalLink className="w-4 h-4" />
-                </a>
+                {dockerStatus?.available ? (
+                  <span className="bg-green-900/50 text-green-400 px-3 py-1 rounded-lg text-sm">
+                    Available
+                  </span>
+                ) : (
+                  <span className="bg-blue-900/50 text-blue-400 px-3 py-1 rounded-lg text-sm">
+                    Using GitHub Actions
+                  </span>
+                )}
               </div>
-              {dockerStatus && (
-                <div
-                  className={`mt-3 p-2 rounded flex items-center gap-2 text-sm ${
-                    dockerStatus.available
-                      ? 'bg-green-900/30 text-green-400'
-                      : 'bg-red-900/30 text-red-400'
-                  }`}
-                >
-                  {dockerStatus.available ? (
-                    <CheckCircle className="w-4 h-4" />
-                  ) : (
-                    <XCircle className="w-4 h-4" />
-                  )}
+              {dockerStatus && !dockerStatus.available && (
+                <div className="mt-3 p-2 rounded flex items-center gap-2 text-sm bg-blue-900/30 text-blue-300">
+                  <Info className="w-4 h-4" />
+                  Docker images are built automatically via GitHub Actions
+                </div>
+              )}
+              {dockerStatus?.available && (
+                <div className="mt-3 p-2 rounded flex items-center gap-2 text-sm bg-green-900/30 text-green-400">
+                  <CheckCircle className="w-4 h-4" />
                   {dockerStatus.message}
                 </div>
               )}

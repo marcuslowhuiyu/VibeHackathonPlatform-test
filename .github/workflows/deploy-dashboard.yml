@@ -152,8 +152,8 @@ jobs:
           SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
           EFS_SG_ID="${{ steps.infra.outputs.efs_sg_id }}"
 
-          # Create or get EFS file system
-          EFS_ID=$(aws efs describe-file-systems --query "FileSystems[?Name=='vibe-dashboard-efs'].FileSystemId" --output text 2>/dev/null)
+          # Create or get EFS file system (using creation-token to find existing)
+          EFS_ID=$(aws efs describe-file-systems --creation-token vibe-dashboard-efs --query "FileSystems[0].FileSystemId" --output text 2>/dev/null || echo "None")
           if [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ]; then
             echo "Creating new EFS file system..."
             EFS_ID=$(aws efs create-file-system \
@@ -161,7 +161,6 @@ jobs:
               --performance-mode generalPurpose \
               --throughput-mode bursting \
               --encrypted \
-              --tags Key=Name,Value=vibe-dashboard-efs \
               --query 'FileSystemId' --output text)
 
             # Wait for EFS to be available
@@ -194,14 +193,13 @@ jobs:
           sleep 30
 
           # Create or get access point
-          AP_ID=$(aws efs describe-access-points --file-system-id $EFS_ID --query "AccessPoints[?Name=='vibe-dashboard-ap'].AccessPointId" --output text 2>/dev/null)
+          AP_ID=$(aws efs describe-access-points --file-system-id $EFS_ID --query "AccessPoints[0].AccessPointId" --output text 2>/dev/null)
           if [ -z "$AP_ID" ] || [ "$AP_ID" == "None" ]; then
             echo "Creating access point..."
             AP_ID=$(aws efs create-access-point \
               --file-system-id $EFS_ID \
               --posix-user Uid=1000,Gid=1000 \
               --root-directory "Path=/dashboard-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=755}" \
-              --tags Key=Name,Value=vibe-dashboard-ap \
               --query 'AccessPointId' --output text)
             echo "Created access point: $AP_ID"
           else

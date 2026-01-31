@@ -946,144 +946,164 @@ export default function SetupGuide() {
         badgeColor={dockerBadge.color}
       >
         <div className="space-y-4">
-          {/* Docker Status */}
+          {/* Docker Status - Show GitHub Actions message when Docker not available */}
           {dockerStatus && !dockerStatus.available && (
-            <div className="p-3 rounded-lg bg-yellow-900/30 border border-yellow-700 flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-yellow-400" />
-              <span className="text-yellow-300">{dockerStatus.message}</span>
+            <div className="p-4 rounded-lg bg-blue-900/30 border border-blue-600">
+              <div className="flex items-start gap-3">
+                <Info className="w-5 h-5 text-blue-400 mt-0.5" />
+                <div className="flex-1">
+                  <p className="text-blue-300 font-medium">Docker not available on this server</p>
+                  <p className="text-sm text-gray-400 mt-1">
+                    The coding lab image is built automatically via GitHub Actions when you push changes to the repository.
+                  </p>
+                  <a
+                    href="https://github.com/Marcushadow/VibeHackathonPlatform/actions"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 mt-3 bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-lg text-sm"
+                  >
+                    View GitHub Actions
+                    <ExternalLink className="w-4 h-4" />
+                  </a>
+                </div>
+              </div>
             </div>
           )}
 
-          <p className="text-gray-400">
-            Build the Docker image for AI extension(s) and push to ECR.
-          </p>
-
-          {/* Extension Selector */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-gray-300">Select AI Extension(s) to Build</label>
-              {enabledExtensions.length > 1 && (
-                <button
-                  onClick={selectAllExtensions}
-                  className="text-xs text-blue-400 hover:text-blue-300"
-                >
-                  Select All
-                </button>
-              )}
-            </div>
-            <div className="grid gap-2">
-              {enabledExtensions.map((ext) => {
-                const config = AI_EXTENSIONS[ext]
-                const isSelected = selectedExtensions.includes(ext)
-                return (
-                  <button
-                    key={ext}
-                    onClick={() => toggleExtension(ext)}
-                    disabled={isBuilding}
-                    className={`p-3 rounded-lg border text-left transition-all ${
-                      isSelected
-                        ? config.bgColor
-                        : 'bg-gray-700/30 border-gray-600 hover:border-gray-500'
-                    } ${isBuilding ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
-                          isSelected ? 'border-current bg-current/20' : 'border-gray-500'
-                        } ${config.color}`}
-                      >
-                        {isSelected && <Check className="w-3 h-3" />}
-                      </div>
-                      <div className="flex-1">
-                        <span className={`font-medium ${isSelected ? config.color : 'text-gray-300'}`}>
-                          {config.name}
-                        </span>
-                        <p className="text-xs text-gray-400 mt-0.5">{config.description}</p>
-                      </div>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-            {enabledExtensions.length === 1 && (
-              <p className="text-xs text-gray-500 italic">
-                Additional AI extensions can be enabled in the code (AI_EXTENSIONS config)
+          {dockerStatus?.available && (
+            <>
+              <p className="text-gray-400">
+                Build the Docker image for AI extension(s) and push to ECR.
               </p>
-            )}
-          </div>
 
-          <button
-            onClick={startBuild}
-            disabled={isBuilding || !dockerStatus?.available || selectedExtensions.length === 0}
-            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 rounded-lg flex items-center gap-2 font-medium"
-          >
-            {isBuilding ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                Building {selectedExtensions.map(e => AI_EXTENSIONS[e].name).join(', ')} image{selectedExtensions.length > 1 ? 's' : ''}...
-              </>
-            ) : (
-              <>
-                <Play className="w-5 h-5" />
-                Build & Push {selectedExtensions.length > 1 ? `${selectedExtensions.length} Images` : AI_EXTENSIONS[selectedExtensions[0]].name}
-              </>
-            )}
-          </button>
+              {/* Extension Selector */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium text-gray-300">Select AI Extension(s) to Build</label>
+                  {enabledExtensions.length > 1 && (
+                    <button
+                      onClick={selectAllExtensions}
+                      className="text-xs text-blue-400 hover:text-blue-300"
+                    >
+                      Select All
+                    </button>
+                  )}
+                </div>
+                <div className="grid gap-2">
+                  {enabledExtensions.map((ext) => {
+                    const config = AI_EXTENSIONS[ext]
+                    const isSelected = selectedExtensions.includes(ext)
+                    return (
+                      <button
+                        key={ext}
+                        onClick={() => toggleExtension(ext)}
+                        disabled={isBuilding}
+                        className={`p-3 rounded-lg border text-left transition-all ${
+                          isSelected
+                            ? config.bgColor
+                            : 'bg-gray-700/30 border-gray-600 hover:border-gray-500'
+                        } ${isBuilding ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
+                              isSelected ? 'border-current bg-current/20' : 'border-gray-500'
+                            } ${config.color}`}
+                          >
+                            {isSelected && <Check className="w-3 h-3" />}
+                          </div>
+                          <div className="flex-1">
+                            <span className={`font-medium ${isSelected ? config.color : 'text-gray-300'}`}>
+                              {config.name}
+                            </span>
+                            <p className="text-xs text-gray-400 mt-0.5">{config.description}</p>
+                          </div>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+                {enabledExtensions.length === 1 && (
+                  <p className="text-xs text-gray-500 italic">
+                    Additional AI extensions can be enabled in the code (AI_EXTENSIONS config)
+                  </p>
+                )}
+              </div>
 
-          {/* Real-time Progress Bar */}
-          {(isBuilding || dockerSteps.length > 0) && (
-            <div className="space-y-3">
-              {/* Current Step */}
-              {isBuilding && dockerSteps.length > 0 && (
-                <div className="flex items-center gap-2 text-sm text-blue-400 bg-blue-900/20 p-3 rounded-lg">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  {dockerSteps[dockerSteps.length - 1]?.message}
+              <button
+                onClick={startBuild}
+                disabled={isBuilding || !dockerStatus?.available || selectedExtensions.length === 0}
+                className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 rounded-lg flex items-center gap-2 font-medium"
+              >
+                {isBuilding ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Building {selectedExtensions.map(e => AI_EXTENSIONS[e].name).join(', ')} image{selectedExtensions.length > 1 ? 's' : ''}...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-5 h-5" />
+                    Build & Push {selectedExtensions.length > 1 ? `${selectedExtensions.length} Images` : AI_EXTENSIONS[selectedExtensions[0]].name}
+                  </>
+                )}
+              </button>
+
+              {/* Real-time Progress Bar */}
+              {(isBuilding || dockerSteps.length > 0) && (
+                <div className="space-y-3">
+                  {/* Current Step */}
+                  {isBuilding && dockerSteps.length > 0 && (
+                    <div className="flex items-center gap-2 text-sm text-blue-400 bg-blue-900/20 p-3 rounded-lg">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      {dockerSteps[dockerSteps.length - 1]?.message}
+                    </div>
+                  )}
+
+                  {/* Step Details */}
+                  <DockerProgressDisplay steps={dockerSteps} />
                 </div>
               )}
 
-              {/* Step Details */}
-              <DockerProgressDisplay steps={dockerSteps} />
-            </div>
-          )}
-
-          {buildError && (
-            <div className="p-4 bg-red-900/30 border border-red-700 rounded-lg">
-              <p className="text-red-400">{buildError}</p>
-            </div>
-          )}
-
-          {/* Manual Commands */}
-          <div className="border border-gray-700 rounded-lg overflow-hidden">
-            <button
-              onClick={() => setShowManualDocker(!showManualDocker)}
-              className="w-full px-4 py-3 bg-gray-700/50 hover:bg-gray-700 flex items-center gap-2 text-left text-sm"
-            >
-              {showManualDocker ? (
-                <ChevronDown className="w-4 h-4" />
-              ) : (
-                <ChevronRight className="w-4 h-4" />
+              {buildError && (
+                <div className="p-4 bg-red-900/30 border border-red-700 rounded-lg">
+                  <p className="text-red-400">{buildError}</p>
+                </div>
               )}
-              <span>Manual Commands (if automated build doesn't work)</span>
-            </button>
-            {showManualDocker && (
-              <div className="p-4 relative">
-                <pre className="bg-gray-900 rounded-lg p-4 text-sm text-gray-300 overflow-x-auto">
-                  {dockerCommands?.commands || '# Configure AWS credentials first'}
-                </pre>
+
+              {/* Manual Commands */}
+              <div className="border border-gray-700 rounded-lg overflow-hidden">
                 <button
-                  onClick={copyDockerCommands}
-                  className="absolute top-6 right-6 bg-gray-700 hover:bg-gray-600 p-2 rounded"
-                  title="Copy commands"
+                  onClick={() => setShowManualDocker(!showManualDocker)}
+                  className="w-full px-4 py-3 bg-gray-700/50 hover:bg-gray-700 flex items-center gap-2 text-left text-sm"
                 >
-                  {copiedDocker ? (
-                    <Check className="w-4 h-4 text-green-400" />
+                  {showManualDocker ? (
+                    <ChevronDown className="w-4 h-4" />
                   ) : (
-                    <Copy className="w-4 h-4" />
+                    <ChevronRight className="w-4 h-4" />
                   )}
+                  <span>Manual Commands (if automated build doesn't work)</span>
                 </button>
+                {showManualDocker && (
+                  <div className="p-4 relative">
+                    <pre className="bg-gray-900 rounded-lg p-4 text-sm text-gray-300 overflow-x-auto">
+                      {dockerCommands?.commands || '# Configure AWS credentials first'}
+                    </pre>
+                    <button
+                      onClick={copyDockerCommands}
+                      className="absolute top-6 right-6 bg-gray-700 hover:bg-gray-600 p-2 rounded"
+                      title="Copy commands"
+                    >
+                      {copiedDocker ? (
+                        <Check className="w-4 h-4 text-green-400" />
+                      ) : (
+                        <Copy className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </>
+          )}
         </div>
       </CollapsibleSection>
 

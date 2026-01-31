@@ -221,4 +221,28 @@ router.delete('/', (req, res) => {
   }
 });
 
+// Debug: Check participant password status (admin only)
+router.get('/debug/check-passwords', (req, res) => {
+  try {
+    const participants = getAllParticipants();
+    const summary = participants.map((p) => ({
+      id: p.id,
+      name: p.name,
+      email: p.email,
+      has_password_hash: !!p.password_hash,
+      password_hash_length: p.password_hash?.length || 0,
+      instance_id: p.instance_id,
+    }));
+
+    res.json({
+      total: participants.length,
+      with_password: summary.filter((p) => p.has_password_hash).length,
+      without_password: summary.filter((p) => !p.has_password_hash).length,
+      participants: summary,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

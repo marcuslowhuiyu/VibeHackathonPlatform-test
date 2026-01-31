@@ -85,6 +85,15 @@ jobs:
           fi
           echo "ecs_sg_id=$ECS_SG_ID" >> $GITHUB_OUTPUT
 
+          # Create or get EFS security group
+          EFS_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=vibe-dashboard-efs-sg" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+          if [ "$EFS_SG_ID" == "None" ] || [ -z "$EFS_SG_ID" ]; then
+            EFS_SG_ID=$(aws ec2 create-security-group --group-name vibe-dashboard-efs-sg --description "Vibe Dashboard EFS Security Group" --vpc-id $VPC_ID --query 'GroupId' --output text)
+            # Allow NFS from ECS tasks
+            aws ec2 authorize-security-group-ingress --group-id $EFS_SG_ID --protocol tcp --port 2049 --source-group $ECS_SG_ID
+          fi
+          echo "efs_sg_id=$EFS_SG_ID" >> $GITHUB_OUTPUT
+
           # Create or get ALB
           ALB_ARN=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
           if [ "$ALB_ARN" == "None" ] || [ -z "$ALB_ARN" ]; then
@@ -136,6 +145,111 @@ jobs:
             echo "Created HTTP listener"
           fi
 
+      - name: Setup EFS for persistent storage
+        id: efs
+        run: |
+          VPC_ID="${{ steps.infra.outputs.vpc_id }}"
+          SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
+          EFS_SG_ID="${{ steps.infra.outputs.efs_sg_id }}"
+
+          # Create or get EFS file system
+          EFS_ID=$(aws efs describe-file-systems --query "FileSystems[?Name=='vibe-dashboard-efs'].FileSystemId" --output text 2>/dev/null)
+          if [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ]; then
+            echo "Creating new EFS file system..."
+            EFS_ID=$(aws efs create-file-system \
+              --creation-token vibe-dashboard-efs \
+              --performance-mode generalPurpose \
+              --throughput-mode bursting \
+              --encrypted \
+              --tags Key=Name,Value=vibe-dashboard-efs \
+              --query 'FileSystemId' --output text)
+
+            # Wait for EFS to be available
+            echo "Waiting for EFS to be available..."
+            while [ "$(aws efs describe-file-systems --file-system-id $EFS_ID --query 'FileSystems[0].LifeCycleState' --output text)" != "available" ]; do
+              sleep 5
+            done
+            echo "EFS is available: $EFS_ID"
+          else
+            echo "Using existing EFS: $EFS_ID"
+          fi
+          echo "efs_id=$EFS_ID" >> $GITHUB_OUTPUT
+
+          # Create mount targets in each subnet
+          for SUBNET in $(echo $SUBNET_IDS | tr ',' ' '); do
+            MT_ID=$(aws efs describe-mount-targets --file-system-id $EFS_ID --query "MountTargets[?SubnetId=='$SUBNET'].MountTargetId" --output text 2>/dev/null)
+            if [ -z "$MT_ID" ] || [ "$MT_ID" == "None" ]; then
+              echo "Creating mount target in subnet $SUBNET..."
+              aws efs create-mount-target \
+                --file-system-id $EFS_ID \
+                --subnet-id $SUBNET \
+                --security-groups $EFS_SG_ID || true
+            else
+              echo "Mount target already exists in subnet $SUBNET"
+            fi
+          done
+
+          # Wait for mount targets to be available
+          echo "Waiting for mount targets..."
+          sleep 30
+
+          # Create or get access point
+          AP_ID=$(aws efs describe-access-points --file-system-id $EFS_ID --query "AccessPoints[?Name=='vibe-dashboard-ap'].AccessPointId" --output text 2>/dev/null)
+          if [ -z "$AP_ID" ] || [ "$AP_ID" == "None" ]; then
+            echo "Creating access point..."
+            AP_ID=$(aws efs create-access-point \
+              --file-system-id $EFS_ID \
+              --posix-user Uid=1000,Gid=1000 \
+              --root-directory "Path=/dashboard-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=755}" \
+              --tags Key=Name,Value=vibe-dashboard-ap \
+              --query 'AccessPointId' --output text)
+            echo "Created access point: $AP_ID"
+          else
+            echo "Using existing access point: $AP_ID"
+          fi
+          echo "ap_id=$AP_ID" >> $GITHUB_OUTPUT
+
+      - name: Setup ECS Task Role for EFS
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          EFS_ID="${{ steps.efs.outputs.efs_id }}"
+
+          # Check if task role exists
+          TASK_ROLE_EXISTS=$(aws iam get-role --role-name ecsTaskRole 2>/dev/null && echo "yes" || echo "no")
+
+          if [ "$TASK_ROLE_EXISTS" == "no" ]; then
+            echo "Creating ecsTaskRole..."
+            cat > trust-policy.json << 'EOF'
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Principal": {"Service": "ecs-tasks.amazonaws.com"},
+              "Action": "sts:AssumeRole"
+            }]
+          }
+          EOF
+            aws iam create-role --role-name ecsTaskRole --assume-role-policy-document file://trust-policy.json
+          fi
+
+          # Attach EFS policy
+          echo "Attaching EFS access policy..."
+          cat > efs-policy.json << EOF
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": [
+                "elasticfilesystem:ClientMount",
+                "elasticfilesystem:ClientWrite",
+                "elasticfilesystem:ClientRootAccess"
+              ],
+              "Resource": "arn:aws:elasticfilesystem:${{ env.AWS_REGION }}:${AWS_ACCOUNT_ID}:file-system/${EFS_ID}"
+            }]
+          }
+          EOF
+          aws iam put-role-policy --role-name ecsTaskRole --policy-name efs-access --policy-document file://efs-policy.json
+
       - name: Register new task definition
         id: task-def
         env:
@@ -144,8 +258,10 @@ jobs:
         run: |
           # Get AWS account ID
           AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          EFS_ID="${{ steps.efs.outputs.efs_id }}"
+          AP_ID="${{ steps.efs.outputs.ap_id }}"
 
-          # Create task definition JSON
+          # Create task definition JSON with EFS volume
           cat > task-def.json << EOF
           {
             "family": "vibe-dashboard",
@@ -154,6 +270,7 @@ jobs:
             "cpu": "512",
             "memory": "1024",
             "executionRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
+            "taskRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ecsTaskRole",
             "containerDefinitions": [
               {
                 "name": "${{ env.CONTAINER_NAME }}",
@@ -167,12 +284,13 @@ jobs:
                 ],
                 "environment": [
                   {"name": "NODE_ENV", "value": "production"},
-                  {"name": "PORT", "value": "3001"}
+                  {"name": "PORT", "value": "3001"},
+                  {"name": "DATA_DIR", "value": "/mnt/efs/data"}
                 ],
                 "mountPoints": [
                   {
-                    "sourceVolume": "dashboard-data",
-                    "containerPath": "/app/data",
+                    "sourceVolume": "efs-data",
+                    "containerPath": "/mnt/efs/data",
                     "readOnly": false
                   }
                 ],
@@ -196,7 +314,15 @@ jobs:
             ],
             "volumes": [
               {
-                "name": "dashboard-data"
+                "name": "efs-data",
+                "efsVolumeConfiguration": {
+                  "fileSystemId": "${EFS_ID}",
+                  "transitEncryption": "ENABLED",
+                  "authorizationConfig": {
+                    "accessPointId": "${AP_ID}",
+                    "iam": "ENABLED"
+                  }
+                }
               }
             ]
           }

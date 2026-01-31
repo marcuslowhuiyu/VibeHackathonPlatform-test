@@ -126,6 +126,70 @@ Give participants:
 
 Passwords are 8-character alphanumeric, shown once after import. Export to CSV for distribution.
 
+## AWS IAM Permissions for Deployment
+
+### GitHub Secrets Required
+
+Add these secrets to your GitHub repository (Settings → Secrets → Actions):
+
+| Secret | Description |
+|--------|-------------|
+| `AWS_ACCESS_KEY_ID` | IAM user access key |
+| `AWS_SECRET_ACCESS_KEY` | IAM user secret key |
+
+### Required IAM Permissions
+
+The IAM user needs the following permissions for the GitHub Actions deployment to work:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ecr:*",
+                "ecs:*",
+                "ec2:DescribeVpcs",
+                "ec2:DescribeSubnets",
+                "ec2:DescribeSecurityGroups",
+                "ec2:CreateSecurityGroup",
+                "ec2:AuthorizeSecurityGroupIngress",
+                "ec2:DeleteSecurityGroup",
+                "elasticloadbalancing:*",
+                "iam:GetRole",
+                "iam:CreateRole",
+                "iam:PutRolePolicy",
+                "iam:PassRole",
+                "iam:AttachRolePolicy",
+                "logs:CreateLogGroup",
+                "logs:DescribeLogGroups",
+                "cloudfront:*",
+                "elasticfilesystem:CreateFileSystem",
+                "elasticfilesystem:DescribeFileSystems",
+                "elasticfilesystem:CreateMountTarget",
+                "elasticfilesystem:DescribeMountTargets",
+                "elasticfilesystem:CreateAccessPoint",
+                "elasticfilesystem:DescribeAccessPoints",
+                "elasticfilesystem:DeleteFileSystem",
+                "elasticfilesystem:DeleteMountTarget",
+                "elasticfilesystem:DeleteAccessPoint",
+                "sts:GetCallerIdentity"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+```
+
+Or attach these AWS managed policies:
+- `AmazonECS_FullAccess`
+- `AmazonEC2ContainerRegistryFullAccess`
+- `ElasticLoadBalancingFullAccess`
+- `CloudFrontFullAccess`
+- `AmazonElasticFileSystemFullAccess`
+- `IAMFullAccess` (or scoped to ECS roles)
+
 ## Deployment
 
 See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for detailed instructions including:

@@ -73,115 +73,6 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_CODING_LAB:latest
           echo "Coding lab image pushed: $ECR_REGISTRY/$ECR_CODING_LAB:latest"
 
-      - name: Setup CodeBuild for remote builds
-        run: |
-          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          EFS_ID="${{ steps.efs.outputs.efs_id }}"
-          VPC_ID="${{ steps.infra.outputs.vpc_id }}"
-          SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
-          ECS_SG_ID="${{ steps.infra.outputs.ecs_sg_id }}"
-
-          # Get first subnet for CodeBuild
-          FIRST_SUBNET=$(echo $SUBNET_IDS | cut -d',' -f1)
-
-          # Create CodeBuild service role if not exists
-          ROLE_EXISTS=$(aws iam get-role --role-name codebuild-vibe-service-role 2>/dev/null && echo "yes" || echo "no")
-          if [ "$ROLE_EXISTS" == "no" ]; then
-            echo "Creating CodeBuild service role..."
-            cat > codebuild-trust-policy.json << 'EOF'
-          {
-            "Version": "2012-10-17",
-            "Statement": [{
-              "Effect": "Allow",
-              "Principal": {"Service": "codebuild.amazonaws.com"},
-              "Action": "sts:AssumeRole"
-            }]
-          }
-          EOF
-            aws iam create-role --role-name codebuild-vibe-service-role --assume-role-policy-document file://codebuild-trust-policy.json
-
-            # Attach policies for ECR, CloudWatch Logs, VPC, and EFS
-            aws iam attach-role-policy --role-name codebuild-vibe-service-role --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
-            aws iam attach-role-policy --role-name codebuild-vibe-service-role --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
-            aws iam attach-role-policy --role-name codebuild-vibe-service-role --policy-arn arn:aws:iam::aws:policy/AmazonElasticFileSystemReadOnlyAccess
-
-            # Add VPC permissions for CodeBuild
-            cat > codebuild-vpc-policy.json << EOF
-          {
-            "Version": "2012-10-17",
-            "Statement": [{
-              "Effect": "Allow",
-              "Action": [
-                "ec2:CreateNetworkInterface",
-                "ec2:DescribeNetworkInterfaces",
-                "ec2:DeleteNetworkInterface",
-                "ec2:DescribeSubnets",
-                "ec2:DescribeSecurityGroups",
-                "ec2:DescribeDhcpOptions",
-                "ec2:DescribeVpcs",
-                "ec2:CreateNetworkInterfacePermission"
-              ],
-              "Resource": "*"
-            }]
-          }
-          EOF
-            aws iam put-role-policy --role-name codebuild-vibe-service-role --policy-name vpc-access --policy-document file://codebuild-vpc-policy.json
-
-            echo "CodeBuild service role created"
-            sleep 10  # Wait for role to propagate
-          fi
-
-          # Create CodeBuild project if not exists
-          PROJECT_EXISTS=$(aws codebuild batch-get-projects --names vibe-coding-lab-builder --query 'projects[0].name' --output text 2>/dev/null || echo "None")
-          if [ "$PROJECT_EXISTS" == "None" ] || [ -z "$PROJECT_EXISTS" ]; then
-            echo "Creating CodeBuild project with EFS access..."
-
-            # Create project config JSON
-            cat > codebuild-project.json << EOF
-          {
-            "name": "vibe-coding-lab-builder",
-            "description": "Builds the Vibe Coding Lab Docker image from EFS",
-            "source": {
-              "type": "NO_SOURCE",
-              "buildspec": "version: 0.2\nphases:\n  pre_build:\n    commands:\n      - echo Logging in to Amazon ECR...\n      - aws ecr get-login-password --region \$AWS_DEFAULT_REGION | docker login --username AWS --password-stdin \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com\n      - echo Copying files from EFS...\n      - mkdir -p /tmp/build\n      - cp -r /mnt/efs/cline-setup/* /tmp/build/ 2>/dev/null || echo 'Using default files'\n      - ls -la /tmp/build/\n  build:\n    commands:\n      - echo Building the Docker image...\n      - cd /tmp/build\n      - docker build --build-arg AI_EXTENSION=continue -t vibe-coding-lab:continue .\n      - docker tag vibe-coding-lab:continue \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue\n      - docker tag vibe-coding-lab:continue \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest\n  post_build:\n    commands:\n      - echo Pushing the Docker image...\n      - docker push \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue\n      - docker push \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest\n      - echo Build completed"
-            },
-            "artifacts": {
-              "type": "NO_ARTIFACTS"
-            },
-            "environment": {
-              "type": "LINUX_CONTAINER",
-              "computeType": "BUILD_GENERAL1_MEDIUM",
-              "image": "aws/codebuild/amazonlinux2-x86_64-standard:5.0",
-              "privilegedMode": true,
-              "environmentVariables": [
-                {"name": "AWS_ACCOUNT_ID", "value": "${AWS_ACCOUNT_ID}"},
-                {"name": "AWS_DEFAULT_REGION", "value": "${{ env.AWS_REGION }}"}
-              ]
-            },
-            "serviceRole": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/codebuild-vibe-service-role",
-            "vpcConfig": {
-              "vpcId": "${VPC_ID}",
-              "subnets": ["${FIRST_SUBNET}"],
-              "securityGroupIds": ["${ECS_SG_ID}"]
-            },
-            "fileSystemLocations": [
-              {
-                "type": "EFS",
-                "location": "${EFS_ID}.efs.${{ env.AWS_REGION }}.amazonaws.com:/",
-                "mountPoint": "/mnt/efs",
-                "identifier": "efs_mount",
-                "mountOptions": "nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2"
-              }
-            ]
-          }
-          EOF
-
-            aws codebuild create-project --cli-input-json file://codebuild-project.json
-            echo "CodeBuild project created with EFS mount"
-          else
-            echo "CodeBuild project already exists"
-          fi
-
       - name: Setup Infrastructure (VPC, ALB, Target Group)
         id: infra
         run: |
@@ -335,6 +226,115 @@ jobs:
             echo "Using existing access point: $AP_ID"
           fi
           echo "ap_id=$AP_ID" >> $GITHUB_OUTPUT
+
+      - name: Setup CodeBuild for remote builds
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          EFS_ID="${{ steps.efs.outputs.efs_id }}"
+          VPC_ID="${{ steps.infra.outputs.vpc_id }}"
+          SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
+          ECS_SG_ID="${{ steps.infra.outputs.ecs_sg_id }}"
+
+          # Get first subnet for CodeBuild
+          FIRST_SUBNET=$(echo $SUBNET_IDS | cut -d',' -f1)
+
+          # Create CodeBuild service role if not exists
+          ROLE_EXISTS=$(aws iam get-role --role-name codebuild-vibe-service-role 2>/dev/null && echo "yes" || echo "no")
+          if [ "$ROLE_EXISTS" == "no" ]; then
+            echo "Creating CodeBuild service role..."
+            cat > codebuild-trust-policy.json << 'EOF'
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Principal": {"Service": "codebuild.amazonaws.com"},
+              "Action": "sts:AssumeRole"
+            }]
+          }
+          EOF
+            aws iam create-role --role-name codebuild-vibe-service-role --assume-role-policy-document file://codebuild-trust-policy.json
+
+            # Attach policies for ECR, CloudWatch Logs, VPC, and EFS
+            aws iam attach-role-policy --role-name codebuild-vibe-service-role --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
+            aws iam attach-role-policy --role-name codebuild-vibe-service-role --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+            aws iam attach-role-policy --role-name codebuild-vibe-service-role --policy-arn arn:aws:iam::aws:policy/AmazonElasticFileSystemReadOnlyAccess
+
+            # Add VPC permissions for CodeBuild
+            cat > codebuild-vpc-policy.json << EOF
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": [
+                "ec2:CreateNetworkInterface",
+                "ec2:DescribeNetworkInterfaces",
+                "ec2:DeleteNetworkInterface",
+                "ec2:DescribeSubnets",
+                "ec2:DescribeSecurityGroups",
+                "ec2:DescribeDhcpOptions",
+                "ec2:DescribeVpcs",
+                "ec2:CreateNetworkInterfacePermission"
+              ],
+              "Resource": "*"
+            }]
+          }
+          EOF
+            aws iam put-role-policy --role-name codebuild-vibe-service-role --policy-name vpc-access --policy-document file://codebuild-vpc-policy.json
+
+            echo "CodeBuild service role created"
+            sleep 10  # Wait for role to propagate
+          fi
+
+          # Create CodeBuild project if not exists
+          PROJECT_EXISTS=$(aws codebuild batch-get-projects --names vibe-coding-lab-builder --query 'projects[0].name' --output text 2>/dev/null || echo "None")
+          if [ "$PROJECT_EXISTS" == "None" ] || [ -z "$PROJECT_EXISTS" ]; then
+            echo "Creating CodeBuild project with EFS access..."
+
+            # Create project config JSON
+            cat > codebuild-project.json << EOF
+          {
+            "name": "vibe-coding-lab-builder",
+            "description": "Builds the Vibe Coding Lab Docker image from EFS",
+            "source": {
+              "type": "NO_SOURCE",
+              "buildspec": "version: 0.2\nphases:\n  pre_build:\n    commands:\n      - echo Logging in to Amazon ECR...\n      - aws ecr get-login-password --region \$AWS_DEFAULT_REGION | docker login --username AWS --password-stdin \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com\n      - echo Copying files from EFS...\n      - mkdir -p /tmp/build\n      - cp -r /mnt/efs/cline-setup/* /tmp/build/ 2>/dev/null || echo 'Using default files'\n      - ls -la /tmp/build/\n  build:\n    commands:\n      - echo Building the Docker image...\n      - cd /tmp/build\n      - docker build --build-arg AI_EXTENSION=continue -t vibe-coding-lab:continue .\n      - docker tag vibe-coding-lab:continue \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue\n      - docker tag vibe-coding-lab:continue \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest\n  post_build:\n    commands:\n      - echo Pushing the Docker image...\n      - docker push \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue\n      - docker push \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest\n      - echo Build completed"
+            },
+            "artifacts": {
+              "type": "NO_ARTIFACTS"
+            },
+            "environment": {
+              "type": "LINUX_CONTAINER",
+              "computeType": "BUILD_GENERAL1_MEDIUM",
+              "image": "aws/codebuild/amazonlinux2-x86_64-standard:5.0",
+              "privilegedMode": true,
+              "environmentVariables": [
+                {"name": "AWS_ACCOUNT_ID", "value": "${AWS_ACCOUNT_ID}"},
+                {"name": "AWS_DEFAULT_REGION", "value": "${{ env.AWS_REGION }}"}
+              ]
+            },
+            "serviceRole": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/codebuild-vibe-service-role",
+            "vpcConfig": {
+              "vpcId": "${VPC_ID}",
+              "subnets": ["${FIRST_SUBNET}"],
+              "securityGroupIds": ["${ECS_SG_ID}"]
+            },
+            "fileSystemLocations": [
+              {
+                "type": "EFS",
+                "location": "${EFS_ID}.efs.${{ env.AWS_REGION }}.amazonaws.com:/",
+                "mountPoint": "/mnt/efs",
+                "identifier": "efs_mount",
+                "mountOptions": "nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2"
+              }
+            ]
+          }
+          EOF
+
+            aws codebuild create-project --cli-input-json file://codebuild-project.json
+            echo "CodeBuild project created with EFS mount"
+          else
+            echo "CodeBuild project already exists"
+          fi
 
       - name: Setup ECS Task Role for EFS
         run: |

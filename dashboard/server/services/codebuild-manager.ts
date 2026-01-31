@@ -2,8 +2,8 @@ import {
   CodeBuildClient,
   StartBuildCommand,
   BatchGetBuildsCommand,
+  BatchGetProjectsCommand,
   CreateProjectCommand,
-  DescribeProjectsCommand,
 } from '@aws-sdk/client-codebuild';
 import { getCredentials } from '../db/database.js';
 
@@ -38,7 +38,7 @@ export async function checkProjectExists(): Promise<boolean> {
   const client = getClient();
   try {
     const response = await client.send(
-      new DescribeProjectsCommand({ names: [PROJECT_NAME] })
+      new BatchGetProjectsCommand({ names: [PROJECT_NAME] })
     );
     return (response.projects?.length ?? 0) > 0;
   } catch (err: any) {

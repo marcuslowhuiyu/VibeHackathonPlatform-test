@@ -302,7 +302,7 @@ jobs:
           fi
           SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
 
-          # Check if service exists
+          # Check if service exists and its status
           SERVICE_STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
 
           if [ "$SERVICE_STATUS" == "ACTIVE" ]; then
@@ -312,11 +312,33 @@ jobs:
               --service ${{ env.ECS_SERVICE }} \
               --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
               --force-new-deployment
+          elif [ "$SERVICE_STATUS" == "DRAINING" ]; then
+            echo "Service is draining, waiting for it to complete..."
+            while true; do
+              STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+              if [ "$STATUS" == "INACTIVE" ] || [ "$STATUS" == "MISSING" ]; then
+                echo "Service is now inactive"
+                break
+              fi
+              echo "Still draining... waiting 10s"
+              sleep 10
+            done
+
+            echo "Creating new service..."
+            aws ecs create-service \
+              --cluster ${{ env.ECS_CLUSTER }} \
+              --service-name ${{ env.ECS_SERVICE }} \
+              --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
+              --desired-count 1 \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_IDS],securityGroups=[$ECS_SG_ID],assignPublicIp=ENABLED}" \
+              --load-balancers "targetGroupArn=$TG_ARN,containerName=${{ env.CONTAINER_NAME }},containerPort=3001" \
+              --deployment-configuration "minimumHealthyPercent=0,maximumPercent=200" \
+              --health-check-grace-period-seconds 60
           else
             echo "Creating new service..."
             # Delete inactive service if exists
             aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE }} --force 2>/dev/null || true
-            sleep 5
 
             aws ecs create-service \
               --cluster ${{ env.ECS_CLUSTER }} \

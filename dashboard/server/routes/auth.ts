@@ -43,6 +43,8 @@ router.post('/participant/login', (req, res) => {
   try {
     const { email, password } = req.body;
 
+    console.log(`[Auth] Participant login attempt for email: ${email}`);
+
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
@@ -50,6 +52,14 @@ router.post('/participant/login', (req, res) => {
     const participant = verifyParticipantPassword(email, password);
 
     if (!participant) {
+      // Debug: check if participant exists at all
+      const { getParticipantByEmail, getAllParticipants } = require('../db/database.js');
+      const existingParticipant = getParticipantByEmail(email);
+      const totalParticipants = getAllParticipants().length;
+      console.log(`[Auth] Login failed. Participant exists: ${!!existingParticipant}, Total participants in DB: ${totalParticipants}`);
+      if (existingParticipant) {
+        console.log(`[Auth] Participant found but password mismatch. Has password_hash: ${!!existingParticipant.password_hash}`);
+      }
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 

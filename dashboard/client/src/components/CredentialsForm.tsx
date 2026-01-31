@@ -194,15 +194,18 @@ export default function CredentialsForm() {
                   <ul className="list-disc list-inside ml-4 text-gray-400">
                     <li><code className="bg-gray-700 px-1 rounded">AmazonECS_FullAccess</code> - Run ECS tasks</li>
                     <li><code className="bg-gray-700 px-1 rounded">AmazonEC2ContainerRegistryFullAccess</code> - Push Docker images</li>
-                    <li><code className="bg-gray-700 px-1 rounded">AmazonEC2ReadOnlyAccess</code> - Get public IPs</li>
+                    <li><code className="bg-gray-700 px-1 rounded">AmazonEC2ReadOnlyAccess</code> - Get VPC/subnet info</li>
+                    <li><code className="bg-gray-700 px-1 rounded">ElasticLoadBalancingFullAccess</code> - ALB for dashboard</li>
                     <li><code className="bg-gray-700 px-1 rounded">CloudWatchLogsFullAccess</code> - View container logs</li>
-                    <li><code className="bg-gray-700 px-1 rounded">CloudFrontFullAccess</code> - HTTPS for instances</li>
+                    <li><code className="bg-gray-700 px-1 rounded">CloudFrontFullAccess</code> - HTTPS for dashboard & instances</li>
+                    <li><code className="bg-gray-700 px-1 rounded">AmazonElasticFileSystemFullAccess</code> - Persistent storage</li>
+                    <li><code className="bg-gray-700 px-1 rounded">AWSCodeBuildDeveloperAccess</code> - Build images from dashboard</li>
                   </ul>
                   <p className="mt-2 text-gray-500 text-xs font-medium">
-                    Optional (only for automated setup):
+                    Required for automated setup:
                   </p>
                   <ul className="list-disc list-inside ml-4 text-gray-400">
-                    <li><code className="bg-gray-700 px-1 rounded">IAMFullAccess</code> - Creates ECS roles automatically</li>
+                    <li><code className="bg-gray-700 px-1 rounded">IAMFullAccess</code> - Creates ECS/CodeBuild service roles</li>
                   </ul>
                   <p className="mt-2 text-gray-500 text-xs font-medium">
                     Optional (for AI in containers):

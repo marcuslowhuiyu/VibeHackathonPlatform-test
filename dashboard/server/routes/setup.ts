@@ -12,20 +12,58 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROJECT_ROOT = join(__dirname, '..', '..', '..');
 
+// Use EFS for editable files if DATA_DIR is set (production), otherwise use local
+const EFS_CLINE_DIR = process.env.DATA_DIR ? join(process.env.DATA_DIR, '..', 'cline-setup') : null;
+const LOCAL_CLINE_DIR = join(PROJECT_ROOT, 'cline-setup');
+
+// Initialize EFS cline-setup directory with default files if needed
+function initEfsClineSetup() {
+  if (!EFS_CLINE_DIR) return;
+
+  try {
+    if (!existsSync(EFS_CLINE_DIR)) {
+      const { mkdirSync, copyFileSync } = require('fs');
+      mkdirSync(EFS_CLINE_DIR, { recursive: true });
+
+      // Copy default files from container to EFS
+      const files = ['Dockerfile', 'entrypoint.sh', 'cline-config.json'];
+      for (const file of files) {
+        const src = join(LOCAL_CLINE_DIR, file);
+        const dest = join(EFS_CLINE_DIR, file);
+        if (existsSync(src) && !existsSync(dest)) {
+          copyFileSync(src, dest);
+          console.log(`Copied ${file} to EFS`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Failed to init EFS cline-setup:', err);
+  }
+}
+
+// Initialize on module load
+initEfsClineSetup();
+
+// Get the appropriate path for editable files
+function getEditableFilePath(filename: string): string {
+  // In production with EFS, use EFS path; otherwise use local
+  if (EFS_CLINE_DIR && existsSync(EFS_CLINE_DIR)) {
+    return join(EFS_CLINE_DIR, filename);
+  }
+  return join(LOCAL_CLINE_DIR, filename);
+}
+
 // Editable files configuration
-const EDITABLE_FILES: Record<string, { path: string; description: string; language: string }> = {
+const EDITABLE_FILES: Record<string, { description: string; language: string }> = {
   'Dockerfile': {
-    path: join(PROJECT_ROOT, 'cline-setup', 'Dockerfile'),
     description: 'Docker image configuration - defines the container environment',
     language: 'dockerfile',
   },
   'entrypoint.sh': {
-    path: join(PROJECT_ROOT, 'cline-setup', 'entrypoint.sh'),
     description: 'Container startup script - runs when the container starts',
     language: 'bash',
   },
   'cline-config.json': {
-    path: join(PROJECT_ROOT, 'cline-setup', 'cline-config.json'),
     description: 'Continue AI assistant settings - model, instructions, auto-approval',
     language: 'json',
   },
@@ -116,9 +154,10 @@ router.get('/files', (req, res) => {
     name,
     description: config.description,
     language: config.language,
-    exists: existsSync(config.path),
+    exists: existsSync(getEditableFilePath(name)),
+    location: EFS_CLINE_DIR ? 'EFS (persistent)' : 'Local (container)',
   }));
-  res.json({ files });
+  res.json({ files, usingEfs: !!EFS_CLINE_DIR });
 });
 
 // Get file content
@@ -131,11 +170,12 @@ router.get('/files/:filename', (req, res) => {
   }
 
   try {
-    if (!existsSync(fileConfig.path)) {
+    const filePath = getEditableFilePath(filename);
+    if (!existsSync(filePath)) {
       return res.status(404).json({ error: 'File does not exist on disk' });
     }
 
-    const content = readFileSync(fileConfig.path, 'utf-8');
+    const content = readFileSync(filePath, 'utf-8');
     res.json({
       name: filename,
       content,
@@ -162,8 +202,9 @@ router.put('/files/:filename', (req, res) => {
   }
 
   try {
-    writeFileSync(fileConfig.path, content, 'utf-8');
-    res.json({ success: true, message: `${filename} saved successfully` });
+    const filePath = getEditableFilePath(filename);
+    writeFileSync(filePath, content, 'utf-8');
+    res.json({ success: true, message: `${filename} saved successfully${EFS_CLINE_DIR ? ' to EFS' : ''}` });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { nanoid } from 'nanoid';
 import {
   createParticipantsWithPasswords,
   regenerateParticipantPassword,
@@ -11,7 +12,11 @@ import {
   assignParticipantToInstance,
   unassignParticipant,
   Participant,
+  getAllInstances,
+  createInstance,
+  updateInstance,
 } from '../db/database.js';
+import { runTask } from '../services/ecs-manager.js';
 
 const router = Router();
 
@@ -216,6 +221,96 @@ router.delete('/', (req, res) => {
   try {
     deleteAllParticipants();
     res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Auto-assign all unassigned participants to available instances
+// Spins up new instances if needed
+router.post('/auto-assign', async (req, res) => {
+  try {
+    const { extension = 'continue' } = req.body;
+
+    // Get unassigned participants
+    const unassigned = getUnassignedParticipants();
+    if (unassigned.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No unassigned participants',
+        assigned: 0,
+        instancesCreated: 0,
+      });
+    }
+
+    // Get available instances (running/provisioning without participants)
+    const instances = getAllInstances();
+    const availableInstances = instances.filter(
+      (i) =>
+        !i.participant_name &&
+        ['running', 'provisioning', 'pending'].includes(i.status.toLowerCase())
+    );
+
+    const results = {
+      assigned: 0,
+      instancesCreated: 0,
+      errors: [] as string[],
+    };
+
+    // First, assign to available instances
+    const toAssignFromExisting = Math.min(unassigned.length, availableInstances.length);
+    for (let i = 0; i < toAssignFromExisting; i++) {
+      try {
+        assignParticipantToInstance(unassigned[i].id, availableInstances[i].id);
+        results.assigned++;
+      } catch (err: any) {
+        results.errors.push(`Assign ${unassigned[i].name}: ${err.message}`);
+      }
+    }
+
+    // If we still have unassigned participants, spin up new instances
+    const remaining = unassigned.slice(toAssignFromExisting);
+    if (remaining.length > 0) {
+      const extPrefixes: Record<string, string> = {
+        continue: 'ct',
+      };
+      const extPrefix = extPrefixes[extension] || 'ct';
+
+      // Spin up instances for remaining participants
+      const promises = remaining.map(async (participant) => {
+        const instanceId = `vibe-${extPrefix}-${nanoid(5)}`;
+        try {
+          // Create local record
+          const instance = createInstance(instanceId, extension);
+
+          // Start ECS task
+          const taskInfo = await runTask(instanceId, extension);
+
+          // Update with task ARN
+          updateInstance(instanceId, {
+            task_arn: taskInfo.taskArn,
+            status: taskInfo.status.toLowerCase(),
+          });
+
+          // Assign participant
+          assignParticipantToInstance(participant.id, instanceId);
+          results.instancesCreated++;
+          results.assigned++;
+        } catch (err: any) {
+          results.errors.push(`Create instance for ${participant.name}: ${err.message}`);
+        }
+      });
+
+      await Promise.all(promises);
+    }
+
+    res.json({
+      success: true,
+      message: `Assigned ${results.assigned} participants`,
+      assigned: results.assigned,
+      instancesCreated: results.instancesCreated,
+      errors: results.errors.length > 0 ? results.errors : undefined,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

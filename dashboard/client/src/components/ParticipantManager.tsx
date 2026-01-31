@@ -15,6 +15,7 @@ import {
   Copy,
   Key,
   Download,
+  Zap,
 } from 'lucide-react'
 import { api, Participant } from '../lib/api'
 
@@ -107,6 +108,14 @@ export default function ParticipantManager() {
     },
   })
 
+  const autoAssignMutation = useMutation({
+    mutationFn: () => api.autoAssignParticipants('continue'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['participants'] })
+      queryClient.invalidateQueries({ queryKey: ['instances'] })
+    },
+  })
+
   const parseImportText = (text: string): { name: string; email: string; notes?: string }[] => {
     const lines = text.trim().split('\n')
     const participants: { name: string; email: string; notes?: string }[] = []
@@ -171,6 +180,24 @@ export default function ParticipantManager() {
               <Upload className="w-4 h-4" />
               Import
             </button>
+            {stats.unassigned > 0 && (
+              <button
+                onClick={() => {
+                  if (confirm(`Auto-assign ${stats.unassigned} unassigned participants to instances?\n\nNew instances will be spun up if needed.`)) {
+                    autoAssignMutation.mutate()
+                  }
+                }}
+                disabled={autoAssignMutation.isPending}
+                className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-4 py-2 rounded-lg flex items-center gap-2"
+              >
+                {autoAssignMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Zap className="w-4 h-4" />
+                )}
+                Auto-Assign All
+              </button>
+            )}
             {participants.length > 0 && (
               <button
                 onClick={() => {

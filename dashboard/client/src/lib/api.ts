@@ -410,4 +410,23 @@ export const api = {
       } | null
       message?: string
     }>('/portal/my-instance'),
+
+  changeParticipantPassword: (currentPassword: string, newPassword: string) =>
+    fetchJson<{ success: boolean; message: string }>('/portal/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
+  // Auto-assign all unassigned participants
+  autoAssignParticipants: (extension: string = 'continue') =>
+    fetchJson<{
+      success: boolean
+      message: string
+      assigned: number
+      instancesCreated: number
+      errors?: string[]
+    }>('/participants/auto-assign', {
+      method: 'POST',
+      body: JSON.stringify({ extension }),
+    }),
 }

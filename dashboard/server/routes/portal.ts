@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { getParticipantById, getInstanceById } from '../db/database.js';
+import bcrypt from 'bcryptjs';
+import { getParticipantById, getInstanceById, updateParticipant } from '../db/database.js';
 import { requireParticipant } from '../middleware/auth.js';
 
 const router = Router();
@@ -67,6 +68,47 @@ router.get('/my-instance', (req, res) => {
   } catch (err) {
     console.error('Get my instance error:', err);
     res.status(500).json({ error: 'Failed to get instance' });
+  }
+});
+
+// Change participant password
+router.post('/change-password', (req, res) => {
+  try {
+    const participantId = req.user?.id;
+
+    if (!participantId) {
+      return res.status(400).json({ error: 'Participant ID not found in token' });
+    }
+
+    const participant = getParticipantById(participantId);
+
+    if (!participant) {
+      return res.status(404).json({ error: 'Participant not found' });
+    }
+
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current and new password are required' });
+    }
+
+    if (newPassword.length < 4) {
+      return res.status(400).json({ error: 'New password must be at least 4 characters' });
+    }
+
+    // Verify current password
+    if (!participant.password_hash || !bcrypt.compareSync(currentPassword, participant.password_hash)) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+
+    // Hash and save new password
+    const newHash = bcrypt.hashSync(newPassword, 10);
+    updateParticipant(participantId, { password_hash: newHash });
+
+    res.json({ success: true, message: 'Password updated successfully' });
+  } catch (err) {
+    console.error('Change password error:', err);
+    res.status(500).json({ error: 'Failed to change password' });
   }
 });
 

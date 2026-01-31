@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQuery, useMutation } from '@tanstack/react-query'
 import {
   Users,
   Code,
@@ -9,6 +10,8 @@ import {
   Clock,
   LogOut,
   ExternalLink,
+  Key,
+  X,
 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { TokenPayload } from '../../lib/auth'
@@ -19,10 +22,35 @@ interface ParticipantPortalProps {
 }
 
 export default function ParticipantPortal({ user, onLogout }: ParticipantPortalProps) {
+  const [showPasswordModal, setShowPasswordModal] = useState(false)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [passwordError, setPasswordError] = useState('')
+  const [passwordSuccess, setPasswordSuccess] = useState(false)
+
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['my-instance'],
     queryFn: api.getMyInstance,
     refetchInterval: 10000, // Refresh every 10 seconds
+  })
+
+  const changePasswordMutation = useMutation({
+    mutationFn: () => api.changeParticipantPassword(currentPassword, newPassword),
+    onSuccess: () => {
+      setPasswordSuccess(true)
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
+      setPasswordError('')
+      setTimeout(() => {
+        setShowPasswordModal(false)
+        setPasswordSuccess(false)
+      }, 2000)
+    },
+    onError: (err: any) => {
+      setPasswordError(err.message)
+    },
   })
 
   if (isLoading) {
@@ -93,13 +121,22 @@ export default function ParticipantPortal({ user, onLogout }: ParticipantPortalP
               <p className="text-sm text-gray-400">Participant Portal</p>
             </div>
           </div>
-          <button
-            onClick={onLogout}
-            className="text-gray-400 hover:text-white flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-700"
-          >
-            <LogOut className="w-4 h-4" />
-            Logout
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowPasswordModal(true)}
+              className="text-gray-400 hover:text-white flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-700"
+            >
+              <Key className="w-4 h-4" />
+              Change Password
+            </button>
+            <button
+              onClick={onLogout}
+              className="text-gray-400 hover:text-white flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-700"
+            >
+              <LogOut className="w-4 h-4" />
+              Logout
+            </button>
+          </div>
         </div>
       </header>
 
@@ -237,6 +274,135 @@ export default function ParticipantPortal({ user, onLogout }: ParticipantPortalP
           </div>
         )}
       </main>
+
+      {/* Change Password Modal */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+          <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <Key className="w-5 h-5" />
+                Change Password
+              </h3>
+              <button
+                onClick={() => {
+                  setShowPasswordModal(false)
+                  setCurrentPassword('')
+                  setNewPassword('')
+                  setConfirmPassword('')
+                  setPasswordError('')
+                  setPasswordSuccess(false)
+                }}
+                className="text-gray-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {passwordSuccess ? (
+              <div className="text-center py-8">
+                <CheckCircle className="w-16 h-16 text-green-400 mx-auto mb-4" />
+                <p className="text-green-400 font-semibold">Password updated successfully!</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    Current Password
+                  </label>
+                  <input
+                    type="password"
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                    placeholder="Enter current password"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    New Password
+                  </label>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                    placeholder="Enter new password (min 4 characters)"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    Confirm New Password
+                  </label>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                    placeholder="Confirm new password"
+                  />
+                </div>
+
+                {passwordError && (
+                  <div className="bg-red-900/50 border border-red-600 rounded-lg p-3 text-red-200 text-sm">
+                    {passwordError}
+                  </div>
+                )}
+
+                {newPassword && confirmPassword && newPassword !== confirmPassword && (
+                  <div className="text-sm text-yellow-400">
+                    Passwords do not match
+                  </div>
+                )}
+
+                <div className="flex gap-2 justify-end pt-2">
+                  <button
+                    onClick={() => {
+                      setShowPasswordModal(false)
+                      setCurrentPassword('')
+                      setNewPassword('')
+                      setConfirmPassword('')
+                      setPasswordError('')
+                    }}
+                    className="bg-gray-600 hover:bg-gray-500 px-4 py-2 rounded-lg"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      setPasswordError('')
+                      if (!currentPassword || !newPassword) {
+                        setPasswordError('Please fill in all fields')
+                        return
+                      }
+                      if (newPassword.length < 4) {
+                        setPasswordError('New password must be at least 4 characters')
+                        return
+                      }
+                      if (newPassword !== confirmPassword) {
+                        setPasswordError('Passwords do not match')
+                        return
+                      }
+                      changePasswordMutation.mutate()
+                    }}
+                    disabled={changePasswordMutation.isPending}
+                    className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-4 py-2 rounded-lg flex items-center gap-2"
+                  >
+                    {changePasswordMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Key className="w-4 h-4" />
+                    )}
+                    Update Password
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

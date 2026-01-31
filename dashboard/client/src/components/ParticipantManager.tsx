@@ -32,6 +32,7 @@ export default function ParticipantManager() {
   const [showAssignModal, setShowAssignModal] = useState<Participant | null>(null)
   const [importedCredentials, setImportedCredentials] = useState<ImportedCredentials[] | null>(null)
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
+  const [regeneratedPassword, setRegeneratedPassword] = useState<{ id: string; password: string } | null>(null)
 
   const { data: participantsData, isLoading } = useQuery({
     queryKey: ['participants'],
@@ -96,6 +97,13 @@ export default function ParticipantManager() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['participants'] })
       queryClient.invalidateQueries({ queryKey: ['instances'] })
+    },
+  })
+
+  const regeneratePasswordMutation = useMutation({
+    mutationFn: api.regenerateParticipantPassword,
+    onSuccess: (data: any, participantId: string) => {
+      setRegeneratedPassword({ id: participantId, password: data.password })
     },
   })
 
@@ -258,6 +266,18 @@ export default function ParticipantManager() {
                       <UserPlus className="w-4 h-4" />
                     </button>
                   )}
+                  <button
+                    onClick={() => {
+                      if (confirm(`Regenerate password for ${participant.name}?`)) {
+                        regeneratePasswordMutation.mutate(participant.id)
+                      }
+                    }}
+                    disabled={regeneratePasswordMutation.isPending}
+                    className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 p-2 rounded-lg"
+                    title="Regenerate Password"
+                  >
+                    <Key className="w-4 h-4" />
+                  </button>
                   <button
                     onClick={() => {
                       if (confirm(`Delete participant ${participant.name}?`)) {
@@ -508,6 +528,56 @@ Bob Wilson\tbob@example.com\tNeeds extra help`}
               </button>
               <button
                 onClick={() => setImportedCredentials(null)}
+                className="bg-gray-600 hover:bg-gray-500 px-4 py-2 rounded-lg"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Regenerated Password Modal */}
+      {regeneratedPassword && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold flex items-center gap-2 text-green-400">
+                <Key className="w-5 h-5" />
+                New Password Generated
+              </h3>
+              <button
+                onClick={() => setRegeneratedPassword(null)}
+                className="text-gray-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-yellow-900/30 border border-yellow-600 rounded-lg p-3 mb-4">
+              <p className="text-yellow-200 text-sm">
+                Save this password now! It cannot be retrieved later.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between bg-gray-700 rounded-lg p-4 mb-4">
+              <code className="text-xl font-mono text-emerald-400">
+                {regeneratedPassword.password}
+              </code>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(regeneratedPassword.password)
+                }}
+                className="bg-gray-600 hover:bg-gray-500 p-2 rounded-lg"
+                title="Copy password"
+              >
+                <Copy className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={() => setRegeneratedPassword(null)}
                 className="bg-gray-600 hover:bg-gray-500 px-4 py-2 rounded-lg"
               >
                 Close

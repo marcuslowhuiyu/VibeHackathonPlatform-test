@@ -192,7 +192,19 @@ Or attach these AWS managed policies:
 - `ElasticLoadBalancingFullAccess`
 - `CloudFrontFullAccess`
 - `AmazonElasticFileSystemFullAccess`
-- `IAMFullAccess` (or scoped to ECS roles)
+- `AWSCodeBuildAdminAccess`
+- `IAMFullAccess` (or scoped to ECS/CodeBuild roles)
+
+### What Each Service Is Used For
+
+| Service | Purpose |
+|---------|---------|
+| **ECS** | Runs the dashboard and coding lab containers |
+| **ECR** | Stores Docker images |
+| **EFS** | Persistent storage for database and config files |
+| **CloudFront** | HTTPS access to dashboard and instances |
+| **CodeBuild** | Builds Docker images from dashboard (when Docker unavailable) |
+| **IAM** | Creates service roles for ECS and CodeBuild |
 
 ## Deployment
 

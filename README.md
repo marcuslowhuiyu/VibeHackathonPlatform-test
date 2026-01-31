@@ -174,7 +174,11 @@ The IAM user needs the following permissions for the GitHub Actions deployment t
                 "elasticfilesystem:DeleteFileSystem",
                 "elasticfilesystem:DeleteMountTarget",
                 "elasticfilesystem:DeleteAccessPoint",
-                "sts:GetCallerIdentity"
+                "sts:GetCallerIdentity",
+                "codebuild:CreateProject",
+                "codebuild:StartBuild",
+                "codebuild:BatchGetBuilds",
+                "codebuild:BatchGetProjects"
             ],
             "Resource": "*"
         }

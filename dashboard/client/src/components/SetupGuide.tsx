@@ -615,6 +615,136 @@ const getEnabledExtensions = (): AIExtension[] => {
   )
 }
 
+// CodeBuild Section - for building without Docker
+function CodeBuildSection() {
+  const [isBuilding, setIsBuilding] = useState(false)
+  const [buildId, setBuildId] = useState<string | null>(null)
+  const [buildStatus, setBuildStatus] = useState<{
+    status: string
+    phase: string
+  } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const { data: codebuildStatus } = useQuery({
+    queryKey: ['codebuild-status'],
+    queryFn: api.getCodeBuildStatus,
+  })
+
+  // Poll for build status when building
+  useQuery({
+    queryKey: ['codebuild-progress', buildId],
+    queryFn: async () => {
+      const data = await api.getCodeBuildProgress(buildId!)
+      setBuildStatus({ status: data.status, phase: data.phase })
+      if (data.status === 'SUCCEEDED' || data.status === 'FAILED' || data.status === 'STOPPED') {
+        setIsBuilding(false)
+      }
+      return data
+    },
+    enabled: !!buildId && isBuilding,
+    refetchInterval: 5000,
+  })
+
+  const startBuild = async () => {
+    setIsBuilding(true)
+    setError(null)
+    setBuildStatus(null)
+    try {
+      const result = await api.startCodeBuild()
+      setBuildId(result.buildId)
+    } catch (err: any) {
+      setError(err.message)
+      setIsBuilding(false)
+    }
+  }
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'SUCCEEDED':
+        return 'text-green-400'
+      case 'FAILED':
+        return 'text-red-400'
+      case 'IN_PROGRESS':
+        return 'text-yellow-400'
+      default:
+        return 'text-gray-400'
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="p-4 rounded-lg bg-blue-900/30 border border-blue-600">
+        <div className="flex items-start gap-3">
+          <Cloud className="w-5 h-5 text-blue-400 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-blue-300 font-medium">Build via AWS CodeBuild</p>
+            <p className="text-sm text-gray-400 mt-1">
+              Docker is not available on this server. Use AWS CodeBuild to build and push the coding lab image.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {!codebuildStatus?.exists && (
+        <div className="p-3 rounded-lg bg-yellow-900/30 border border-yellow-600 flex items-center gap-2">
+          <AlertTriangle className="w-5 h-5 text-yellow-400" />
+          <span className="text-yellow-300 text-sm">
+            CodeBuild project not found. Run the GitHub Actions workflow first to set it up.
+          </span>
+        </div>
+      )}
+
+      {codebuildStatus?.exists && (
+        <>
+          <button
+            onClick={startBuild}
+            disabled={isBuilding}
+            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 rounded-lg flex items-center gap-2 font-medium"
+          >
+            {isBuilding ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Building...
+              </>
+            ) : (
+              <>
+                <Play className="w-5 h-5" />
+                Build & Push via CodeBuild
+              </>
+            )}
+          </button>
+
+          {buildStatus && (
+            <div className="p-4 rounded-lg bg-gray-700/50 border border-gray-600">
+              <div className="flex items-center gap-3">
+                {buildStatus.status === 'IN_PROGRESS' ? (
+                  <Loader2 className="w-5 h-5 text-yellow-400 animate-spin" />
+                ) : buildStatus.status === 'SUCCEEDED' ? (
+                  <CheckCircle className="w-5 h-5 text-green-400" />
+                ) : (
+                  <XCircle className="w-5 h-5 text-red-400" />
+                )}
+                <div>
+                  <p className={`font-medium ${getStatusColor(buildStatus.status)}`}>
+                    {buildStatus.status}
+                  </p>
+                  <p className="text-sm text-gray-400">Phase: {buildStatus.phase}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="p-4 bg-red-900/30 border border-red-700 rounded-lg">
+              <p className="text-red-400">{error}</p>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function SetupGuide() {
   const queryClient = useQueryClient()
   const [setupSteps, setSetupSteps] = useState<SetupStep[]>([])
@@ -942,28 +1072,9 @@ export default function SetupGuide() {
         badgeColor={dockerBadge.color}
       >
         <div className="space-y-4">
-          {/* Docker Status - Show GitHub Actions message when Docker not available */}
+          {/* Docker Status - Show CodeBuild option when Docker not available */}
           {dockerStatus && !dockerStatus.available && (
-            <div className="p-4 rounded-lg bg-blue-900/30 border border-blue-600">
-              <div className="flex items-start gap-3">
-                <Info className="w-5 h-5 text-blue-400 mt-0.5" />
-                <div className="flex-1">
-                  <p className="text-blue-300 font-medium">Docker not available on this server</p>
-                  <p className="text-sm text-gray-400 mt-1">
-                    The coding lab image is built automatically via GitHub Actions when you push changes to the repository.
-                  </p>
-                  <a
-                    href="https://github.com/Marcushadow/VibeHackathonPlatform/actions"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 mt-3 bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-lg text-sm"
-                  >
-                    View GitHub Actions
-                    <ExternalLink className="w-4 h-4" />
-                  </a>
-                </div>
-              </div>
-            </div>
+            <CodeBuildSection />
           )}
 
           {dockerStatus?.available && (

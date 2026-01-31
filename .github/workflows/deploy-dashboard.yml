@@ -73,6 +73,72 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_CODING_LAB:latest
           echo "Coding lab image pushed: $ECR_REGISTRY/$ECR_CODING_LAB:latest"
 
+      - name: Setup CodeBuild for remote builds
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+          # Create CodeBuild service role if not exists
+          ROLE_EXISTS=$(aws iam get-role --role-name codebuild-vibe-service-role 2>/dev/null && echo "yes" || echo "no")
+          if [ "$ROLE_EXISTS" == "no" ]; then
+            echo "Creating CodeBuild service role..."
+            cat > codebuild-trust-policy.json << 'EOF'
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Principal": {"Service": "codebuild.amazonaws.com"},
+              "Action": "sts:AssumeRole"
+            }]
+          }
+          EOF
+            aws iam create-role --role-name codebuild-vibe-service-role --assume-role-policy-document file://codebuild-trust-policy.json
+
+            # Attach policies for ECR, CloudWatch Logs, and S3
+            aws iam attach-role-policy --role-name codebuild-vibe-service-role --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
+            aws iam attach-role-policy --role-name codebuild-vibe-service-role --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+
+            echo "CodeBuild service role created"
+          fi
+
+          # Create CodeBuild project if not exists
+          PROJECT_EXISTS=$(aws codebuild batch-get-projects --names vibe-coding-lab-builder --query 'projects[0].name' --output text 2>/dev/null || echo "None")
+          if [ "$PROJECT_EXISTS" == "None" ] || [ -z "$PROJECT_EXISTS" ]; then
+            echo "Creating CodeBuild project..."
+            cat > buildspec.yml << 'EOF'
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo Logging in to Amazon ECR...
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+            build:
+              commands:
+                - echo Building the Docker image...
+                - cd cline-setup
+                - docker build --build-arg AI_EXTENSION=continue -t vibe-coding-lab:continue .
+                - docker tag vibe-coding-lab:continue $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
+                - docker tag vibe-coding-lab:continue $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
+            post_build:
+              commands:
+                - echo Pushing the Docker image...
+                - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
+                - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
+                - echo Build completed
+          EOF
+
+            aws codebuild create-project \
+              --name vibe-coding-lab-builder \
+              --description "Builds the Vibe Coding Lab Docker image" \
+              --source type=GITHUB,location=https://github.com/${{ github.repository }}.git,buildspec="$(cat buildspec.yml)" \
+              --artifacts type=NO_ARTIFACTS \
+              --environment type=LINUX_CONTAINER,computeType=BUILD_GENERAL1_MEDIUM,image=aws/codebuild/amazonlinux2-x86_64-standard:5.0,privilegedMode=true,environmentVariables="[{name=AWS_ACCOUNT_ID,value=${AWS_ACCOUNT_ID}},{name=AWS_DEFAULT_REGION,value=${{ env.AWS_REGION }}}]" \
+              --service-role arn:aws:iam::${AWS_ACCOUNT_ID}:role/codebuild-vibe-service-role
+
+            echo "CodeBuild project created"
+          else
+            echo "CodeBuild project already exists"
+          fi
+
       - name: Setup Infrastructure (VPC, ALB, Target Group)
         id: infra
         run: |

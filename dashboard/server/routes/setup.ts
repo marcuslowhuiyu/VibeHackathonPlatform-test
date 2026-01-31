@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { runFullSetup, checkSetupStatus, getDockerPushCommands, checkDockerAvailable, buildAndPushImage } from '../services/aws-setup.js';
+import * as codebuild from '../services/codebuild-manager.js';
 
 const router = Router();
 
@@ -201,6 +202,40 @@ router.post('/test-cloudfront', async (req, res) => {
       code: err.name,
       details: err.$metadata || null
     });
+  }
+});
+
+// ==========================================
+// CodeBuild Routes - for building without Docker
+// ==========================================
+
+// Check if CodeBuild project exists
+router.get('/codebuild/status', async (req, res) => {
+  try {
+    const exists = await codebuild.checkProjectExists();
+    res.json({ exists, projectName: 'vibe-coding-lab-builder' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Start a CodeBuild build
+router.post('/codebuild/start', async (req, res) => {
+  try {
+    const buildId = await codebuild.startBuild();
+    res.json({ success: true, buildId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get build status
+router.get('/codebuild/build/:buildId', async (req, res) => {
+  try {
+    const status = await codebuild.getBuildStatus(req.params.buildId);
+    res.json(status);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

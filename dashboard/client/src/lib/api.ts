@@ -271,6 +271,22 @@ export const api = {
       error?: string;
     }>('/setup/build-and-push', { method: 'POST' }),
 
+  // CodeBuild (for building without Docker)
+  getCodeBuildStatus: () =>
+    fetchJson<{ exists: boolean; projectName: string }>('/setup/codebuild/status'),
+
+  startCodeBuild: () =>
+    fetchJson<{ success: boolean; buildId: string }>('/setup/codebuild/start', { method: 'POST' }),
+
+  getCodeBuildProgress: (buildId: string) =>
+    fetchJson<{
+      id: string;
+      status: string;
+      phase: string;
+      startTime?: string;
+      endTime?: string;
+    }>(`/setup/codebuild/build/${encodeURIComponent(buildId)}`),
+
   // File editing
   getEditableFiles: () =>
     fetchJson<{

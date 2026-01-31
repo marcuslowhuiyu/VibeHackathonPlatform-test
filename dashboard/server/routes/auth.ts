@@ -41,9 +41,13 @@ router.post('/admin/login', (req, res) => {
 // Participant login
 router.post('/participant/login', (req, res) => {
   try {
-    const { email, password } = req.body;
+    let { email, password } = req.body;
 
-    console.log(`[Auth] Participant login attempt for email: ${email}`);
+    // Clean inputs - trim whitespace, normalize email
+    email = (email || '').toString().trim().toLowerCase();
+    password = (password || '').toString().trim();
+
+    console.log(`[Auth] Participant login attempt for email: "${email}"`);
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });

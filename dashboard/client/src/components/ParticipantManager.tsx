@@ -321,17 +321,19 @@ export default function ParticipantManager() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Paste from Excel or enter CSV data
+                  Paste from Excel or enter CSV/TSV data
                 </label>
                 <p className="text-xs text-gray-500 mb-2">
-                  Format: Name, Email, Notes (one participant per line)
+                  Format: Name, Email, Notes (one participant per line). Supports comma or tab-separated values.
                 </p>
                 <textarea
                   value={importText}
                   onChange={(e) => setImportText(e.target.value)}
-                  placeholder={`John Doe\tjohn@example.com\tVIP guest
-Jane Smith\tjane@example.com
-Bob Wilson\tbob@example.com\tNeeds extra help`}
+                  placeholder={`John Doe, john@example.com, VIP guest
+Jane Smith, jane@example.com
+Bob Wilson, bob@example.com, Needs extra help
+
+Or paste directly from Excel (tab-separated)`}
                   rows={10}
                   className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white placeholder-gray-500 font-mono text-sm"
                 />

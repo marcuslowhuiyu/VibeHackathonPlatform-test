@@ -400,7 +400,8 @@ export function updateAdminPassword(newPasswordHash: string): void {
 
 export function getParticipantByEmail(email: string): Participant | undefined {
   const db = loadDb();
-  return db.participants.find((p) => p.email.toLowerCase() === email.toLowerCase());
+  const cleanEmail = (email || '').trim().toLowerCase();
+  return db.participants.find((p) => (p.email || '').trim().toLowerCase() === cleanEmail);
 }
 
 // Generate a random password (8 chars, alphanumeric)
@@ -424,13 +425,18 @@ export function createParticipantsWithPasswords(
     const plainPassword = generatePassword();
     const passwordHash = bcrypt.hashSync(plainPassword, 10);
 
-    passwords.push({ email: data.email, password: plainPassword });
+    // Clean and normalize email
+    const cleanEmail = (data.email || '').trim().toLowerCase();
+    const cleanName = (data.name || '').trim();
+    const cleanNotes = (data.notes || '').trim();
+
+    passwords.push({ email: cleanEmail, password: plainPassword });
 
     return {
       id: `p-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 5)}`,
-      name: data.name,
-      email: data.email,
-      notes: data.notes,
+      name: cleanName,
+      email: cleanEmail,
+      notes: cleanNotes || undefined,
       instance_id: null,
       password_hash: passwordHash,
       password_plain: plainPassword, // Include for immediate display

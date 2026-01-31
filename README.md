@@ -192,7 +192,7 @@ Or attach these AWS managed policies:
 - `ElasticLoadBalancingFullAccess`
 - `CloudFrontFullAccess`
 - `AmazonElasticFileSystemFullAccess`
-- `AWSCodeBuildDeveloperAccess`
+- `AWSCodeBuildAdminAccess`
 - `IAMFullAccess` (or scoped to ECS/CodeBuild roles)
 
 ### What Each Service Is Used For

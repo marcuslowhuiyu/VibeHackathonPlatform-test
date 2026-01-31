@@ -199,7 +199,7 @@ export default function CredentialsForm() {
                     <li><code className="bg-gray-700 px-1 rounded">CloudWatchLogsFullAccess</code> - View container logs</li>
                     <li><code className="bg-gray-700 px-1 rounded">CloudFrontFullAccess</code> - HTTPS for dashboard & instances</li>
                     <li><code className="bg-gray-700 px-1 rounded">AmazonElasticFileSystemFullAccess</code> - Persistent storage</li>
-                    <li><code className="bg-gray-700 px-1 rounded">AWSCodeBuildDeveloperAccess</code> - Build images from dashboard</li>
+                    <li><code className="bg-gray-700 px-1 rounded">AWSCodeBuildAdminAccess</code> - Create and run CodeBuild projects</li>
                   </ul>
                   <p className="mt-2 text-gray-500 text-xs font-medium">
                     Required for automated setup:

@@ -20,7 +20,6 @@ import {
   FileCode,
   Save,
   RotateCcw,
-  ExternalLink,
   Info,
 } from 'lucide-react'
 import { api } from '../lib/api'

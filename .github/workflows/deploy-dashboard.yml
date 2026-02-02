@@ -2,19 +2,27 @@ name: Deploy to AWS
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]  # Deploy from both main and dev
     paths:
       - 'dashboard/**'
       - 'cline-setup/**'
       - '.github/workflows/deploy-dashboard.yml'
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
 
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: vibe-dashboard
   ECR_CODING_LAB: vibe-coding-lab
   ECS_CLUSTER: vibe-cluster
-  ECS_SERVICE: vibe-dashboard
   CONTAINER_NAME: vibe-dashboard
 
 jobs:
@@ -196,7 +204,13 @@ jobs:
           EFS_ID=$(aws efs describe-file-systems --creation-token vibe-dashboard-efs --query "FileSystems[0].FileSystemId" --output text 2>/dev/null || echo "None")
           if [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ]; then
             EFS_ID=$(aws efs create-file-system --creation-token vibe-dashboard-efs --performance-mode generalPurpose --encrypted --query 'FileSystemId' --output text)
-            aws efs wait file-system-available --file-system-id $EFS_ID
+            # Wait for EFS to be available
+            while true; do
+              STATE=$(aws efs describe-file-systems --file-system-id $EFS_ID --query "FileSystems[0].LifeCycleState" --output text)
+              if [ "$STATE" == "available" ]; then break; fi
+              echo "Waiting for EFS to be available (current: $STATE)..."
+              sleep 5
+            done
           fi
           echo "efs_id=$EFS_ID" >> $GITHUB_OUTPUT
 

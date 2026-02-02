@@ -1,0 +1,75 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [dev, main]
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  validate-branch-name:
+    name: Validate Branch Name
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check branch naming convention
+        id: branch-check
+        run: |
+          BRANCH_NAME="${{ github.head_ref }}"
+          echo "Branch name: $BRANCH_NAME"
+
+          # Define allowed patterns
+          # Feature/VH-123, Bugfix/VH-123, Hotfix/VH-123
+          PATTERN="^(Feature|Bugfix|Hotfix)/VH-[0-9]+$"
+
+          # Allow main and dev branches (for syncing)
+          if [[ "$BRANCH_NAME" == "main" || "$BRANCH_NAME" == "dev" ]]; then
+            echo "✅ Branch '$BRANCH_NAME' is a protected branch - allowed"
+            exit 0
+          fi
+
+          if [[ $BRANCH_NAME =~ $PATTERN ]]; then
+            echo "✅ Branch name '$BRANCH_NAME' follows the naming convention"
+            echo "branch_valid=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Branch name '$BRANCH_NAME' does not follow the naming convention"
+            echo ""
+            echo "Expected format: Feature/VH-123, Bugfix/VH-123, or Hotfix/VH-123"
+            echo ""
+            echo "Examples:"
+            echo "  Feature/VH-42  - For new features"
+            echo "  Bugfix/VH-15   - For bug fixes"
+            echo "  Hotfix/VH-99   - For urgent fixes"
+            echo ""
+            echo "The number should match your Jira ticket ID."
+            exit 1
+          fi
+
+      - name: Extract Jira ticket ID
+        if: success()
+        id: jira
+        run: |
+          BRANCH_NAME="${{ github.head_ref }}"
+          TICKET_ID=$(echo "$BRANCH_NAME" | grep -oE 'VH-[0-9]+')
+          echo "ticket_id=$TICKET_ID" >> $GITHUB_OUTPUT
+          echo "📋 Jira Ticket: $TICKET_ID"
+
+  validate-pr-target:
+    name: Validate PR Target
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR target branch
+        run: |
+          BASE_BRANCH="${{ github.base_ref }}"
+          HEAD_BRANCH="${{ github.head_ref }}"
+
+          echo "PR: $HEAD_BRANCH -> $BASE_BRANCH"
+
+          # Feature/Bugfix branches should target dev, not main
+          if [[ "$HEAD_BRANCH" =~ ^(Feature|Bugfix)/ && "$BASE_BRANCH" == "main" ]]; then
+            echo "❌ Feature and Bugfix branches should target 'dev', not 'main'"
+            echo ""
+            echo "Please change the base branch to 'dev'."
+            echo "Only 'dev' or 'Hotfix/*' branches should be merged directly to 'main'."
+            exit 1
+          fi
+
+          echo "✅ PR target branch is valid"

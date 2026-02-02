@@ -23,6 +23,7 @@ env:
   ECR_REPOSITORY: vibe-dashboard
   ECR_CODING_LAB: vibe-coding-lab
   ECS_CLUSTER: vibe-cluster
+  ECS_SERVICE: vibe-dashboard-service
   CONTAINER_NAME: vibe-dashboard
 
 jobs:

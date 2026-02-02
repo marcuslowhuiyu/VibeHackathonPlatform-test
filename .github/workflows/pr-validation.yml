@@ -17,8 +17,9 @@ jobs:
           echo "Branch name: $BRANCH_NAME"
 
           # Define allowed patterns
-          # Feature/VH-123, Bugfix/VH-123, Hotfix/VH-123
-          PATTERN="^(Feature|Bugfix|Hotfix)/VH-[0-9]+$"
+          # feature/123-description, bugfix/123-description, hotfix/123-description
+          # The description part is optional
+          PATTERN="^(feature|bugfix|hotfix)/[0-9]+(-[a-z0-9-]+)?$"
 
           # Allow main and dev branches (for syncing)
           if [[ "$BRANCH_NAME" == "main" || "$BRANCH_NAME" == "dev" ]]; then
@@ -28,29 +29,28 @@ jobs:
 
           if [[ $BRANCH_NAME =~ $PATTERN ]]; then
             echo "✅ Branch name '$BRANCH_NAME' follows the naming convention"
-            echo "branch_valid=true" >> $GITHUB_OUTPUT
+
+            # Extract issue number
+            ISSUE_NUM=$(echo "$BRANCH_NAME" | grep -oE '/[0-9]+' | tr -d '/')
+            echo "📋 Linked to Issue #$ISSUE_NUM"
+            echo "issue_number=$ISSUE_NUM" >> $GITHUB_OUTPUT
           else
             echo "❌ Branch name '$BRANCH_NAME' does not follow the naming convention"
             echo ""
-            echo "Expected format: Feature/VH-123, Bugfix/VH-123, or Hotfix/VH-123"
+            echo "Expected format: type/issue-number or type/issue-number-description"
             echo ""
             echo "Examples:"
-            echo "  Feature/VH-42  - For new features"
-            echo "  Bugfix/VH-15   - For bug fixes"
-            echo "  Hotfix/VH-99   - For urgent fixes"
+            echo "  feature/42                - Feature for issue #42"
+            echo "  feature/42-add-login      - Feature for issue #42 with description"
+            echo "  bugfix/15-fix-crash       - Bug fix for issue #15"
+            echo "  hotfix/99                 - Urgent fix for issue #99"
             echo ""
-            echo "The number should match your Jira ticket ID."
+            echo "Steps:"
+            echo "  1. Create an issue at: ${{ github.server_url }}/${{ github.repository }}/issues/new"
+            echo "  2. Note the issue number (e.g., #42)"
+            echo "  3. Create branch: git checkout -b feature/42-short-description"
             exit 1
           fi
-
-      - name: Extract Jira ticket ID
-        if: success()
-        id: jira
-        run: |
-          BRANCH_NAME="${{ github.head_ref }}"
-          TICKET_ID=$(echo "$BRANCH_NAME" | grep -oE 'VH-[0-9]+')
-          echo "ticket_id=$TICKET_ID" >> $GITHUB_OUTPUT
-          echo "📋 Jira Ticket: $TICKET_ID"
 
   validate-pr-target:
     name: Validate PR Target
@@ -64,12 +64,55 @@ jobs:
           echo "PR: $HEAD_BRANCH -> $BASE_BRANCH"
 
           # Feature/Bugfix branches should target dev, not main
-          if [[ "$HEAD_BRANCH" =~ ^(Feature|Bugfix)/ && "$BASE_BRANCH" == "main" ]]; then
-            echo "❌ Feature and Bugfix branches should target 'dev', not 'main'"
+          if [[ "$HEAD_BRANCH" =~ ^(feature|bugfix)/ && "$BASE_BRANCH" == "main" ]]; then
+            echo "❌ Feature and bugfix branches should target 'dev', not 'main'"
             echo ""
             echo "Please change the base branch to 'dev'."
-            echo "Only 'dev' or 'Hotfix/*' branches should be merged directly to 'main'."
+            echo "Only 'dev' or 'hotfix/*' branches should be merged directly to 'main'."
             exit 1
           fi
 
           echo "✅ PR target branch is valid"
+
+  verify-issue-exists:
+    name: Verify Issue Exists
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract and verify issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH_NAME="${{ github.head_ref }}"
+
+          # Skip for main/dev branches
+          if [[ "$BRANCH_NAME" == "main" || "$BRANCH_NAME" == "dev" ]]; then
+            echo "✅ Skipping issue check for protected branch"
+            exit 0
+          fi
+
+          # Extract issue number
+          ISSUE_NUM=$(echo "$BRANCH_NAME" | grep -oE '/[0-9]+' | tr -d '/')
+
+          if [[ -z "$ISSUE_NUM" ]]; then
+            echo "⚠️ Could not extract issue number from branch name"
+            exit 0
+          fi
+
+          echo "Checking if issue #$ISSUE_NUM exists..."
+
+          # Check if issue exists using GitHub API
+          HTTP_STATUS=$(curl -s -o /tmp/issue.json -w "%{http_code}" \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "${{ github.api_url }}/repos/${{ github.repository }}/issues/$ISSUE_NUM")
+
+          if [[ "$HTTP_STATUS" == "200" ]]; then
+            ISSUE_TITLE=$(cat /tmp/issue.json | jq -r '.title')
+            ISSUE_STATE=$(cat /tmp/issue.json | jq -r '.state')
+            echo "✅ Issue #$ISSUE_NUM exists: $ISSUE_TITLE (state: $ISSUE_STATE)"
+          else
+            echo "❌ Issue #$ISSUE_NUM does not exist"
+            echo ""
+            echo "Please create an issue first: ${{ github.server_url }}/${{ github.repository }}/issues/new"
+            exit 1
+          fi

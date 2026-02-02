@@ -135,8 +135,11 @@ jobs:
           AP_ID=$(aws efs describe-access-points --file-system-id $EFS_ID --query "AccessPoints[0].AccessPointId" --output text 2>/dev/null || echo "")
           echo "ap_id=$AP_ID" >> $GITHUB_OUTPUT
 
-          # Check if first-time setup needed
-          if [ -z "$ECS_SG_ID" ] || [ "$ECS_SG_ID" == "None" ] || [ -z "$TG_ARN" ] || [ "$TG_ARN" == "None" ]; then
+          # Check if first-time setup needed (check all critical resources)
+          if [ -z "$ECS_SG_ID" ] || [ "$ECS_SG_ID" == "None" ] || \
+             [ -z "$TG_ARN" ] || [ "$TG_ARN" == "None" ] || \
+             [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ] || \
+             [ -z "$AP_ID" ] || [ "$AP_ID" == "None" ]; then
             echo "needs_setup=true" >> $GITHUB_OUTPUT
           else
             echo "needs_setup=false" >> $GITHUB_OUTPUT

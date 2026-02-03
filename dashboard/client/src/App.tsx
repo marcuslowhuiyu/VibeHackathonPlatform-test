@@ -22,10 +22,15 @@ const queryClient = new QueryClient()
 
 function getRouteFromHash(): Route {
   const hash = window.location.hash.slice(1) // Remove the '#'
-  if (hash === '' || hash === '/' || hash === '/landing') return 'landing'
+  if (hash === '/enter' || hash === '/enter/') return 'landing'
   if (hash === '/login' || hash === '/login/') return 'login'
   if (hash === '/admin' || hash === '/admin/') return 'admin'
-  return 'landing' // Default to landing page
+  // Default: redirect to participant entry page
+  if (hash === '' || hash === '/') {
+    window.location.hash = '#/enter'
+    return 'landing'
+  }
+  return 'landing'
 }
 
 function AdminDashboard({ onLogout }: { onLogout: () => void }) {

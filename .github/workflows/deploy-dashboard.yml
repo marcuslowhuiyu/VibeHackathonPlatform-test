@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: ap-southeast-1
   ECR_REPOSITORY: vibe-dashboard
   ECR_CODING_LAB: vibe-coding-lab
   ECS_CLUSTER: vibe-cluster
@@ -45,12 +45,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Create ECR repositories if not exist
+      - name: Create ECR repositories and ECS cluster if not exist
         run: |
           aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} 2>/dev/null || \
             aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }}
           aws ecr describe-repositories --repository-names ${{ env.ECR_CODING_LAB }} 2>/dev/null || \
             aws ecr create-repository --repository-name ${{ env.ECR_CODING_LAB }}
+          aws ecs describe-clusters --clusters ${{ env.ECS_CLUSTER }} --query 'clusters[0].status' --output text 2>/dev/null | grep -q ACTIVE || \
+            aws ecs create-cluster --cluster-name ${{ env.ECS_CLUSTER }}
 
       - name: Build and push Dashboard image
         id: build-dashboard

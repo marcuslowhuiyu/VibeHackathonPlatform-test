@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
-import { Rocket, Loader2, AlertCircle, ExternalLink } from 'lucide-react'
+import { Rocket, Loader2, AlertCircle } from 'lucide-react'
 
 interface LandingPageProps {
-  onSuccess?: (token: string) => void
+  // Reserved for future use
 }
 
 interface LoginResponse {
@@ -24,7 +24,7 @@ interface LoginResponse {
   }
 }
 
-export default function LandingPage({ onSuccess }: LandingPageProps) {
+export default function LandingPage(_props: LandingPageProps = {}) {
   const [code, setCode] = useState<string[]>(['', '', '', '', ''])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -116,11 +116,6 @@ export default function LandingPage({ onSuccess }: LandingPageProps) {
         window.open(loginData.instance.app_url, '_blank')
       }
 
-      // Call success callback
-      if (onSuccess) {
-        onSuccess(loginData.token)
-      }
-
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')
       setCode(['', '', '', '', ''])
@@ -190,11 +185,7 @@ export default function LandingPage({ onSuccess }: LandingPageProps) {
         {/* Footer */}
         <div className="mt-8 text-center">
           <p className="text-gray-500 text-sm">
-            Need help?{' '}
-            <a href="#/portal" className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1">
-              Login with email instead
-              <ExternalLink className="w-3 h-3" />
-            </a>
+            Need help? Contact your event organizer.
           </p>
         </div>
       </div>

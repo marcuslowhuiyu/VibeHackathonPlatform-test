@@ -7,7 +7,7 @@ export default function CredentialsForm() {
   const queryClient = useQueryClient()
   const [accessKeyId, setAccessKeyId] = useState('')
   const [secretAccessKey, setSecretAccessKey] = useState('')
-  const [region, setRegion] = useState('us-east-1')
+  const [region, setRegion] = useState('ap-southeast-1')
   const [showInstructions, setShowInstructions] = useState(false)
 
   const { data: credentials } = useQuery({

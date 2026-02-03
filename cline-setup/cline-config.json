@@ -1,6 +1,6 @@
 {
   "apiProvider": "bedrock",
-  "awsRegion": "us-east-1",
+  "awsRegion": "ap-southeast-1",
   "awsUseProfile": "default",
   "apiModelId": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
   "customInstructions": "You are helping a hackathon participant build a web application. Be concise and helpful. Focus on React and modern web development best practices.",

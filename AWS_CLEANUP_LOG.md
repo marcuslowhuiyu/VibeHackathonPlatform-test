@@ -16,6 +16,7 @@
 | ECR | vibe-dashboard | Docker images for dashboard |
 | ECR | vibe-coding-lab | Docker images for coding lab |
 | EFS | fs-050cb07335b0afa08 | Persistent storage |
+| EFS Access Point | fsap-0e4fcb903ae096a35 | Path: /dashboard-data-v2 |
 | IAM User | github-actions-deploy | For GitHub Actions CI/CD |
 
 ---
@@ -96,3 +97,4 @@ Migrated production from us-east-1 to ap-southeast-1 for better latency for Sing
 - CloudFront still serves globally, now points to ap-southeast-1 ALB
 - Staging environment removed (was not needed)
 - GitHub Actions workflow updated to deploy to ap-southeast-1
+- Database reset with new EFS access point (fsap-0e4fcb903ae096a35, path: /dashboard-data-v2)

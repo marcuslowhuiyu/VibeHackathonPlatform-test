@@ -198,7 +198,17 @@ jobs:
           EFS_ID=$(aws efs describe-file-systems --creation-token vibe-dashboard-efs --query "FileSystems[0].FileSystemId" --output text 2>/dev/null || echo "None")
           if [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ]; then
             EFS_ID=$(aws efs create-file-system --creation-token vibe-dashboard-efs --performance-mode generalPurpose --encrypted --query 'FileSystemId' --output text)
-            aws efs wait file-system-available --file-system-id $EFS_ID
+            # Wait for EFS to be available (polling since aws efs wait doesn't exist)
+            echo "Waiting for EFS $EFS_ID to be available..."
+            while true; do
+              STATUS=$(aws efs describe-file-systems --file-system-id $EFS_ID --query 'FileSystems[0].LifeCycleState' --output text)
+              if [ "$STATUS" == "available" ]; then
+                echo "EFS is available"
+                break
+              fi
+              echo "EFS status: $STATUS, waiting..."
+              sleep 5
+            done
           fi
           echo "efs_id=$EFS_ID" >> $GITHUB_OUTPUT
 

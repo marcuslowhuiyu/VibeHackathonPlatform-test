@@ -2,28 +2,19 @@ name: Deploy to AWS
 
 on:
   push:
-    branches: [main, dev]  # Deploy from both main and dev
+    branches: [main]
     paths:
       - 'dashboard/**'
       - 'cline-setup/**'
       - '.github/workflows/deploy-dashboard.yml'
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Environment to deploy to'
-        required: true
-        default: 'staging'
-        type: choice
-        options:
-          - staging
-          - production
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: ap-southeast-1
   ECR_REPOSITORY: vibe-dashboard
   ECR_CODING_LAB: vibe-coding-lab
   ECS_CLUSTER: vibe-cluster
-  ECS_SERVICE: vibe-dashboard-service
+  ECS_SERVICE: vibe-dashboard
   CONTAINER_NAME: vibe-dashboard
 
 jobs:
@@ -54,12 +45,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Create ECR repositories if not exist
+      - name: Create ECR repositories and ECS cluster if not exist
         run: |
           aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} 2>/dev/null || \
             aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }}
           aws ecr describe-repositories --repository-names ${{ env.ECR_CODING_LAB }} 2>/dev/null || \
             aws ecr create-repository --repository-name ${{ env.ECR_CODING_LAB }}
+          aws ecs describe-clusters --clusters ${{ env.ECS_CLUSTER }} --query 'clusters[0].status' --output text 2>/dev/null | grep -q ACTIVE || \
+            aws ecs create-cluster --cluster-name ${{ env.ECS_CLUSTER }}
 
       - name: Build and push Dashboard image
         id: build-dashboard
@@ -136,11 +129,8 @@ jobs:
           AP_ID=$(aws efs describe-access-points --file-system-id $EFS_ID --query "AccessPoints[0].AccessPointId" --output text 2>/dev/null || echo "")
           echo "ap_id=$AP_ID" >> $GITHUB_OUTPUT
 
-          # Check if first-time setup needed (check all critical resources)
-          if [ -z "$ECS_SG_ID" ] || [ "$ECS_SG_ID" == "None" ] || \
-             [ -z "$TG_ARN" ] || [ "$TG_ARN" == "None" ] || \
-             [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ] || \
-             [ -z "$AP_ID" ] || [ "$AP_ID" == "None" ]; then
+          # Check if first-time setup needed (include EFS and access point check)
+          if [ -z "$ECS_SG_ID" ] || [ "$ECS_SG_ID" == "None" ] || [ -z "$TG_ARN" ] || [ "$TG_ARN" == "None" ] || [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ] || [ -z "$AP_ID" ] || [ "$AP_ID" == "None" ]; then
             echo "needs_setup=true" >> $GITHUB_OUTPUT
           else
             echo "needs_setup=false" >> $GITHUB_OUTPUT
@@ -208,11 +198,15 @@ jobs:
           EFS_ID=$(aws efs describe-file-systems --creation-token vibe-dashboard-efs --query "FileSystems[0].FileSystemId" --output text 2>/dev/null || echo "None")
           if [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ]; then
             EFS_ID=$(aws efs create-file-system --creation-token vibe-dashboard-efs --performance-mode generalPurpose --encrypted --query 'FileSystemId' --output text)
-            # Wait for EFS to be available
+            # Wait for EFS to be available (polling since aws efs wait doesn't exist)
+            echo "Waiting for EFS $EFS_ID to be available..."
             while true; do
-              STATE=$(aws efs describe-file-systems --file-system-id $EFS_ID --query "FileSystems[0].LifeCycleState" --output text)
-              if [ "$STATE" == "available" ]; then break; fi
-              echo "Waiting for EFS to be available (current: $STATE)..."
+              STATUS=$(aws efs describe-file-systems --file-system-id $EFS_ID --query 'FileSystems[0].LifeCycleState' --output text)
+              if [ "$STATUS" == "available" ]; then
+                echo "EFS is available"
+                break
+              fi
+              echo "EFS status: $STATUS, waiting..."
               sleep 5
             done
           fi

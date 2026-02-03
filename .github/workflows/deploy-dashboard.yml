@@ -2,12 +2,21 @@ name: Deploy to AWS
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - 'dashboard/**'
       - 'cline-setup/**'
       - '.github/workflows/deploy-dashboard.yml'
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: false
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
 
 env:
   AWS_REGION: ap-southeast-1
@@ -24,12 +33,42 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       dashboard_image: ${{ steps.build-dashboard.outputs.image }}
+      environment: ${{ steps.set-env.outputs.environment }}
+      ecs_service: ${{ steps.set-env.outputs.ecs_service }}
+      task_cpu: ${{ steps.set-env.outputs.task_cpu }}
+      task_memory: ${{ steps.set-env.outputs.task_memory }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 2  # Need for change detection
+
+      - name: Set environment variables
+        id: set-env
+        run: |
+          # Determine environment from branch or manual input
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ inputs.environment }}" == "staging" ]; then
+            ENVIRONMENT="staging"
+          elif [ "${{ github.ref_name }}" == "dev" ]; then
+            ENVIRONMENT="staging"
+          else
+            ENVIRONMENT="production"
+          fi
+
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+
+          if [ "$ENVIRONMENT" == "staging" ]; then
+            echo "ecs_service=vibe-dashboard-staging" >> $GITHUB_OUTPUT
+            echo "task_cpu=256" >> $GITHUB_OUTPUT
+            echo "task_memory=512" >> $GITHUB_OUTPUT
+          else
+            echo "ecs_service=vibe-dashboard" >> $GITHUB_OUTPUT
+            echo "task_cpu=512" >> $GITHUB_OUTPUT
+            echo "task_memory=1024" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Deploying to: $ENVIRONMENT"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -118,9 +157,17 @@ jobs:
           ECS_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=vibe-dashboard-ecs-sg" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
           echo "ecs_sg_id=$ECS_SG_ID" >> $GITHUB_OUTPUT
 
-          # Get target group
-          TG_ARN=$(aws elbv2 describe-target-groups --names vibe-dashboard-tg --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "")
+          # Get target group (production or staging based on environment)
+          ENVIRONMENT="${{ needs.build.outputs.environment }}"
+          if [ "$ENVIRONMENT" == "staging" ]; then
+            TG_NAME="vibe-dashboard-staging-tg"
+          else
+            TG_NAME="vibe-dashboard-tg"
+          fi
+          TG_ARN=$(aws elbv2 describe-target-groups --names $TG_NAME --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "")
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
+          echo "tg_name=$TG_NAME" >> $GITHUB_OUTPUT
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
 
           # Get EFS
           EFS_ID=$(aws efs describe-file-systems --creation-token vibe-dashboard-efs --query "FileSystems[0].FileSystemId" --output text 2>/dev/null || echo "")
@@ -233,6 +280,43 @@ jobs:
 
           aws iam put-role-policy --role-name ecsTaskRole --policy-name efs-access --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"elasticfilesystem:ClientMount\",\"elasticfilesystem:ClientWrite\",\"elasticfilesystem:ClientRootAccess\"],\"Resource\":\"arn:aws:elasticfilesystem:${{ env.AWS_REGION }}:${AWS_ACCOUNT_ID}:file-system/${EFS_ID}\"}]}"
 
+      - name: Setup staging infrastructure
+        if: needs.build.outputs.environment == 'staging'
+        id: staging-setup
+        run: |
+          VPC_ID="${{ steps.infra.outputs.vpc_id }}"
+
+          # Get ALB ARN and listener
+          ALB_ARN=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+          LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text)
+
+          # Create staging target group if not exists
+          TG_ARN=$(aws elbv2 describe-target-groups --names vibe-dashboard-staging-tg --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
+          if [ "$TG_ARN" == "None" ] || [ -z "$TG_ARN" ]; then
+            echo "Creating staging target group..."
+            TG_ARN=$(aws elbv2 create-target-group \
+              --name vibe-dashboard-staging-tg \
+              --protocol HTTP --port 3001 \
+              --vpc-id $VPC_ID --target-type ip \
+              --health-check-path /api/health \
+              --query 'TargetGroups[0].TargetGroupArn' --output text)
+          fi
+          echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
+
+          # Check if header-based routing rule exists for staging
+          RULE_EXISTS=$(aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
+            --query "Rules[?Conditions[?HttpHeaderConfig.HttpHeaderName=='X-Environment']].RuleArn" \
+            --output text 2>/dev/null || echo "")
+
+          if [ -z "$RULE_EXISTS" ]; then
+            echo "Creating header-based routing rule for staging..."
+            aws elbv2 create-rule \
+              --listener-arn $LISTENER_ARN \
+              --conditions Field=http-header,HttpHeaderConfig="{HttpHeaderName=X-Environment,Values=[staging]}" \
+              --actions Type=forward,TargetGroupArn=$TG_ARN \
+              --priority 10
+          fi
+
       - name: Get ECR registry
         id: ecr
         run: |
@@ -244,6 +328,18 @@ jobs:
         run: |
           AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           ECR_REGISTRY="${{ steps.ecr.outputs.registry }}"
+          ENVIRONMENT="${{ needs.build.outputs.environment }}"
+          TASK_CPU="${{ needs.build.outputs.task_cpu }}"
+          TASK_MEMORY="${{ needs.build.outputs.task_memory }}"
+
+          # Set task family based on environment
+          if [ "$ENVIRONMENT" == "staging" ]; then
+            TASK_FAMILY="vibe-dashboard-staging"
+            NODE_ENV="staging"
+          else
+            TASK_FAMILY="vibe-dashboard"
+            NODE_ENV="production"
+          fi
 
           # Use setup outputs if first-time, otherwise use infra outputs
           if [ "${{ steps.infra.outputs.needs_setup }}" == "true" ]; then
@@ -256,11 +352,11 @@ jobs:
 
           cat > task-def.json << EOF
           {
-            "family": "vibe-dashboard",
+            "family": "${TASK_FAMILY}",
             "networkMode": "awsvpc",
             "requiresCompatibilities": ["FARGATE"],
-            "cpu": "512",
-            "memory": "1024",
+            "cpu": "${TASK_CPU}",
+            "memory": "${TASK_MEMORY}",
             "executionRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
             "taskRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ecsTaskRole",
             "containerDefinitions": [{
@@ -269,7 +365,7 @@ jobs:
               "essential": true,
               "portMappings": [{"containerPort": 3001, "protocol": "tcp"}],
               "environment": [
-                {"name": "NODE_ENV", "value": "production"},
+                {"name": "NODE_ENV", "value": "${NODE_ENV}"},
                 {"name": "PORT", "value": "3001"},
                 {"name": "DATA_DIR", "value": "/mnt/efs/data"}
               ],
@@ -304,30 +400,45 @@ jobs:
 
       - name: Deploy to ECS (update or create service)
         run: |
-          # Use setup outputs if first-time, otherwise use infra outputs
+          ENVIRONMENT="${{ needs.build.outputs.environment }}"
+          ECS_SERVICE_NAME="${{ needs.build.outputs.ecs_service }}"
+
+          # Get security group
           if [ "${{ steps.infra.outputs.needs_setup }}" == "true" ]; then
             ECS_SG_ID="${{ steps.setup.outputs.ecs_sg_id }}"
-            TG_ARN="${{ steps.setup.outputs.tg_arn }}"
           else
             ECS_SG_ID="${{ steps.infra.outputs.ecs_sg_id }}"
+          fi
+
+          # Get target group (staging uses staging-setup output if available)
+          if [ "$ENVIRONMENT" == "staging" ] && [ -n "${{ steps.staging-setup.outputs.tg_arn }}" ]; then
+            TG_ARN="${{ steps.staging-setup.outputs.tg_arn }}"
+          elif [ "${{ steps.infra.outputs.needs_setup }}" == "true" ]; then
+            TG_ARN="${{ steps.setup.outputs.tg_arn }}"
+          else
             TG_ARN="${{ steps.infra.outputs.tg_arn }}"
           fi
+
           SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
 
+          echo "Deploying $ENVIRONMENT environment..."
+          echo "Service: $ECS_SERVICE_NAME"
+          echo "Target Group: $TG_ARN"
+
           # Check if service exists and its status
-          SERVICE_STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          SERVICE_STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
 
           if [ "$SERVICE_STATUS" == "ACTIVE" ]; then
             echo "Updating existing service..."
             aws ecs update-service \
               --cluster ${{ env.ECS_CLUSTER }} \
-              --service ${{ env.ECS_SERVICE }} \
+              --service $ECS_SERVICE_NAME \
               --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
               --force-new-deployment
           elif [ "$SERVICE_STATUS" == "DRAINING" ]; then
             echo "Service is draining, waiting for it to complete..."
             while true; do
-              STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+              STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
               if [ "$STATUS" == "INACTIVE" ] || [ "$STATUS" == "MISSING" ]; then
                 echo "Service is now inactive"
                 break
@@ -339,7 +450,7 @@ jobs:
             echo "Creating new service..."
             aws ecs create-service \
               --cluster ${{ env.ECS_CLUSTER }} \
-              --service-name ${{ env.ECS_SERVICE }} \
+              --service-name $ECS_SERVICE_NAME \
               --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
               --desired-count 1 \
               --launch-type FARGATE \
@@ -350,11 +461,11 @@ jobs:
           else
             echo "Creating new service..."
             # Delete inactive service if exists
-            aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE }} --force 2>/dev/null || true
+            aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SERVICE_NAME --force 2>/dev/null || true
 
             aws ecs create-service \
               --cluster ${{ env.ECS_CLUSTER }} \
-              --service-name ${{ env.ECS_SERVICE }} \
+              --service-name $ECS_SERVICE_NAME \
               --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
               --desired-count 1 \
               --launch-type FARGATE \
@@ -366,16 +477,26 @@ jobs:
 
       - name: Output URLs
         run: |
+          ENVIRONMENT="${{ needs.build.outputs.environment }}"
+          ECS_SERVICE_NAME="${{ needs.build.outputs.ecs_service }}"
           ALB_DNS=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].DNSName' --output text)
           CF_DOMAIN=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[0].DomainName=='$ALB_DNS'].DomainName" --output text 2>/dev/null || echo "")
 
           echo ""
           echo "========================================"
-          echo "  DEPLOYMENT COMPLETE!"
+          echo "  ${ENVIRONMENT^^} DEPLOYMENT COMPLETE!"
           echo "========================================"
           echo ""
-          if [ -n "$CF_DOMAIN" ] && [ "$CF_DOMAIN" != "None" ]; then
-            echo "  HTTPS: https://$CF_DOMAIN"
+          echo "  Environment: $ENVIRONMENT"
+          echo "  Service: $ECS_SERVICE_NAME"
+          echo ""
+          if [ "$ENVIRONMENT" == "staging" ]; then
+            echo "  Access staging via header:"
+            echo "  curl -H 'X-Environment: staging' http://$ALB_DNS/api/health"
+          else
+            if [ -n "$CF_DOMAIN" ] && [ "$CF_DOMAIN" != "None" ]; then
+              echo "  HTTPS: https://$CF_DOMAIN"
+            fi
+            echo "  HTTP:  http://$ALB_DNS"
           fi
-          echo "  HTTP:  http://$ALB_DNS"
           echo "========================================"

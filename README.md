@@ -2,6 +2,22 @@
 
 A complete platform for running coding hackathons with cloud-based VS Code instances. Spin up 1-100 isolated development environments on AWS ECS, each pre-configured with AI coding assistants (Continue + AWS Bedrock).
 
+## Live URLs
+
+### Production
+| Page | URL |
+|------|-----|
+| **Participant Entry** | https://d3ubsvjdhuk97c.cloudfront.net/#/enter |
+| **Admin Dashboard** | https://d3ubsvjdhuk97c.cloudfront.net/#/admin |
+| **Admin Login** | https://d3ubsvjdhuk97c.cloudfront.net/#/login |
+
+### Staging
+| Page | URL |
+|------|-----|
+| **Participant Entry** | https://d2gjoxlutncseu.cloudfront.net/#/enter |
+| **Admin Dashboard** | https://d2gjoxlutncseu.cloudfront.net/#/admin |
+| **Admin Login** | https://d2gjoxlutncseu.cloudfront.net/#/login |
+
 ## Features
 
 ### For Organizers (Admin Dashboard)
@@ -12,10 +28,10 @@ A complete platform for running coding hackathons with cloud-based VS Code insta
 - **Real-time Monitoring** - Live status, CloudFront deployment progress, cost estimates
 - **HTTPS by Default** - Automatic CloudFront distribution for each instance
 
-### For Participants (Portal)
-- **Simple Login** - Email + password authentication
-- **Instance Access** - Direct links to VS Code and React app preview
-- **Auto-refresh** - Status updates automatically as instances become ready
+### For Participants (Landing Page)
+- **Quick Access** - Enter 5-character access code
+- **Auto-Launch** - VS Code and React app preview open automatically in new tabs
+- **No Password Required** - Just the access code provided by organizers
 
 ### Each Coding Instance Includes
 - **VS Code Server** - Full VS Code IDE in the browser (port 8080)
@@ -29,12 +45,12 @@ A complete platform for running coding hackathons with cloud-based VS Code insta
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Vibe Dashboard                           │
 │  ┌─────────────────┐              ┌─────────────────────────┐  │
-│  │  Admin Portal   │              │  Participant Portal     │  │
-│  │  /admin         │              │  /portal                │  │
+│  │  Admin Portal   │              │  Participant Entry      │  │
+│  │  /#/admin       │              │  /#/enter               │  │
 │  │                 │              │                         │  │
-│  │  • AWS Setup    │              │  • Login (email+pass)   │  │
-│  │  • Spin Up      │              │  • View Instance Links  │  │
-│  │  • Participants │              │  • Access VS Code       │  │
+│  │  • AWS Setup    │              │  • Enter access code    │  │
+│  │  • Spin Up      │              │  • Auto-opens VS Code   │  │
+│  │  • Participants │              │  • Auto-opens React App │  │
 │  │  • Settings     │              │                         │  │
 │  └─────────────────┘              └─────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
@@ -106,15 +122,16 @@ Open http://localhost:5173 and login with password: `admin`
 ### 5. Share Access
 
 Give participants:
-- **Portal URL**: `http://your-server/portal`
-- **Their email and password**
+- **Entry URL**: `https://your-domain/#/enter`
+- **Their 5-character access code** (e.g., `A3B7K`)
 
 ## URLs
 
-| Portal | URL | Who Uses It |
-|--------|-----|-------------|
-| **Participant Portal** | `/portal` | Hackathon participants login here |
-| **Admin Dashboard** | `/admin` | Organizers manage everything |
+| Page | URL | Who Uses It |
+|------|-----|-------------|
+| **Participant Entry** | `/#/enter` | Hackathon participants enter access code here |
+| **Admin Dashboard** | `/#/admin` | Organizers manage everything |
+| **Admin Login** | `/#/login` | Admin authentication |
 | **Health Check** | `/api/health` | Monitoring endpoint |
 
 ## Authentication
@@ -122,9 +139,9 @@ Give participants:
 | User Type | Login Method | Default |
 |-----------|--------------|---------|
 | Admin | Password only | `admin` (change in Settings!) |
-| Participant | Email + Password | Auto-generated on import |
+| Participant | 5-character access code | Auto-generated on import |
 
-Passwords are 8-character alphanumeric, shown once after import. Export to CSV for distribution.
+Access codes are 5-character alphanumeric (e.g., `A3B7K`), shown after import. Export to CSV for distribution.
 
 ## AWS IAM Permissions for Deployment
 
@@ -320,7 +337,7 @@ npm run dev
 
 ### "No token provided" errors
 - Clear browser localStorage
-- Login again at `/admin` or `/portal`
+- Login again at `/#/login` (admin) or `/#/enter` (participant)
 
 ### Orphaned instances (running but not tracked)
 1. Go to Instances tab

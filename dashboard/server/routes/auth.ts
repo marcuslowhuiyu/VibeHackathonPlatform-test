@@ -5,6 +5,8 @@ import {
   verifyParticipantPassword,
   getAuthConfig,
   updateAdminPassword,
+  getParticipantByAccessToken,
+  getInstanceById,
 } from '../db/database.js';
 import { generateToken, requireAuth, requireAdmin } from '../middleware/auth.js';
 
@@ -97,6 +99,81 @@ router.get('/verify', requireAuth, (req, res) => {
     valid: true,
     user: req.user,
   });
+});
+
+// Access token login (5-character code from landing page)
+router.post('/access-token/login', (req, res) => {
+  try {
+    let { accessToken } = req.body;
+
+    // Clean input - trim whitespace, uppercase
+    accessToken = (accessToken || '').toString().trim().toUpperCase();
+
+    console.log(`[Auth] Access token login attempt: "${accessToken}"`);
+
+    if (!accessToken || accessToken.length !== 5) {
+      return res.status(400).json({ error: 'Invalid access token format' });
+    }
+
+    const participant = getParticipantByAccessToken(accessToken);
+
+    if (!participant) {
+      console.log(`[Auth] Access token not found: ${accessToken}`);
+      return res.status(401).json({ error: 'Invalid access token' });
+    }
+
+    // Check if participant has an assigned instance
+    if (!participant.instance_id) {
+      return res.status(400).json({
+        error: 'No instance assigned yet. Please wait for your workspace to be provisioned.'
+      });
+    }
+
+    // Get instance details
+    const instance = getInstanceById(participant.instance_id);
+    if (!instance) {
+      return res.status(400).json({
+        error: 'Instance not found. Please contact support.'
+      });
+    }
+
+    // Check if instance is ready
+    if (instance.status !== 'running') {
+      return res.status(400).json({
+        error: `Instance is ${instance.status}. Please wait for it to be ready.`
+      });
+    }
+
+    // Generate JWT token
+    const token = generateToken({
+      type: 'participant',
+      id: participant.id,
+      email: participant.email,
+      name: participant.name,
+    });
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        type: 'participant',
+        id: participant.id,
+        name: participant.name,
+        email: participant.email,
+        instanceId: participant.instance_id,
+      },
+      instance: {
+        id: instance.id,
+        status: instance.status,
+        vscode_url: instance.vscode_url,
+        app_url: instance.app_url,
+        cloudfront_domain: instance.cloudfront_domain,
+      },
+    });
+  } catch (err) {
+    console.error('Access token login error:', err);
+    res.status(500).json({ error: 'Login failed' });
+  }
 });
 
 // Change admin password (requires admin auth)

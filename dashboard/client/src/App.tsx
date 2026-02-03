@@ -10,23 +10,27 @@ import ParticipantManager from './components/ParticipantManager'
 import AdminPasswordForm from './components/AdminPasswordForm'
 import OrphanedInstanceScanner from './components/OrphanedInstanceScanner'
 import AdminLoginPage from './components/auth/AdminLoginPage'
-import ParticipantLoginPage from './components/auth/ParticipantLoginPage'
-import ParticipantPortal from './components/portal/ParticipantPortal'
+import LandingPage from './components/LandingPage'
 import { api } from './lib/api'
 import { useAuth } from './hooks/useAuth'
 
 type Tab = 'instances' | 'participants' | 'settings' | 'setup'
-type Route = 'login' | 'portal' | 'portal-dashboard' | 'admin'
+type Route = 'landing' | 'login' | 'admin'
 
 // Create a query client outside of the component
 const queryClient = new QueryClient()
 
 function getRouteFromHash(): Route {
   const hash = window.location.hash.slice(1) // Remove the '#'
-  if (hash === '/portal' || hash === '/portal/') return 'portal'
-  if (hash === '/portal/dashboard') return 'portal-dashboard'
+  if (hash === '/enter' || hash === '/enter/') return 'landing'
   if (hash === '/login' || hash === '/login/') return 'login'
-  return 'admin' // Default to admin dashboard
+  if (hash === '/admin' || hash === '/admin/') return 'admin'
+  // Default: redirect to participant entry page
+  if (hash === '' || hash === '/') {
+    window.location.hash = '#/enter'
+    return 'landing'
+  }
+  return 'landing'
 }
 
 function AdminDashboard({ onLogout }: { onLogout: () => void }) {
@@ -257,64 +261,44 @@ function AppContent() {
     return () => window.removeEventListener('hashchange', handleHashChange)
   }, [])
 
-  // Handle login
+  // Handle admin login
   const handleLogin = (token: string) => {
     auth.login(token)
-    // Navigate based on current route
-    if (route === 'portal' || route === 'portal-dashboard') {
-      window.location.hash = '#/portal/dashboard'
-    } else {
-      window.location.hash = '#/'
-    }
-    // Force re-render
+    window.location.hash = '#/admin'
     setRoute(getRouteFromHash())
   }
 
-  // Handle logout
+  // Handle admin logout
   const handleLogout = () => {
     auth.logout()
-    // Navigate to appropriate login page
-    if (route === 'portal-dashboard') {
-      window.location.hash = '#/portal'
-    } else {
-      window.location.hash = '#/login'
-    }
+    window.location.hash = '#/login'
     setRoute(getRouteFromHash())
   }
 
-  // Participant portal routes
-  if (route === 'portal') {
-    if (auth.isAuthenticated && auth.isParticipant) {
-      window.location.hash = '#/portal/dashboard'
-      return null
-    }
-    return <ParticipantLoginPage onLogin={handleLogin} />
+  // Landing page (default route) - participants enter access code here
+  if (route === 'landing') {
+    return <LandingPage />
   }
 
-  if (route === 'portal-dashboard') {
-    if (!auth.isAuthenticated || !auth.isParticipant) {
-      window.location.hash = '#/portal'
-      return null
-    }
-    return <ParticipantPortal user={auth.user!} onLogout={handleLogout} />
-  }
-
-  // Admin routes
+  // Admin login
   if (route === 'login') {
     if (auth.isAuthenticated && auth.isAdmin) {
-      window.location.hash = '#/'
+      window.location.hash = '#/admin'
       return null
     }
     return <AdminLoginPage onLogin={handleLogin} />
   }
 
-  // Admin dashboard (default route)
-  if (!auth.isAuthenticated || !auth.isAdmin) {
-    window.location.hash = '#/login'
-    return null
+  // Admin dashboard
+  if (route === 'admin') {
+    if (!auth.isAuthenticated || !auth.isAdmin) {
+      window.location.hash = '#/login'
+      return null
+    }
+    return <AdminDashboard onLogout={handleLogout} />
   }
 
-  return <AdminDashboard onLogout={handleLogout} />
+  return <LandingPage />
 }
 
 function App() {

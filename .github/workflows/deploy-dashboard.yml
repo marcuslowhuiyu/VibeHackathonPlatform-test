@@ -63,7 +63,7 @@ jobs:
             echo "task_cpu=256" >> $GITHUB_OUTPUT
             echo "task_memory=512" >> $GITHUB_OUTPUT
           else
-            echo "ecs_service=vibe-dashboard" >> $GITHUB_OUTPUT
+            echo "ecs_service=vibe-dashboard-service" >> $GITHUB_OUTPUT
             echo "task_cpu=512" >> $GITHUB_OUTPUT
             echo "task_memory=1024" >> $GITHUB_OUTPUT
           fi

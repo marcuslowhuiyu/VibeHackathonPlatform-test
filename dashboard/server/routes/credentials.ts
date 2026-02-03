@@ -25,7 +25,7 @@ router.get('/', (req, res) => {
 
 // Save credentials
 router.post('/', (req, res) => {
-  const { accessKeyId, secretAccessKey, region = 'us-east-1' } = req.body;
+  const { accessKeyId, secretAccessKey, region = 'ap-southeast-1' } = req.body;
 
   if (!accessKeyId || !secretAccessKey) {
     return res.status(400).json({ error: 'accessKeyId and secretAccessKey are required' });

@@ -10,7 +10,7 @@ echo "Instance ID: ${INSTANCE_ID:-not-set}"
 echo "=========================================="
 
 # Set defaults
-AWS_REGION="${AWS_REGION:-us-east-1}"
+AWS_REGION="${AWS_REGION:-ap-southeast-1}"
 CONFIG_FILE="/home/workspace/cline-config.json"
 
 echo "AI Extension: Continue"

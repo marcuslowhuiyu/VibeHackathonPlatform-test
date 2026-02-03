@@ -59,6 +59,7 @@ export interface Participant {
   email: string
   notes?: string
   instance_id: string | null
+  access_token?: string
   created_at: string
   updated_at: string
 }

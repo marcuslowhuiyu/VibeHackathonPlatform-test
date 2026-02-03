@@ -23,6 +23,7 @@ interface ImportedCredentials {
   email: string
   password: string
   name?: string
+  access_token?: string
 }
 
 export default function ParticipantManager() {
@@ -58,6 +59,7 @@ export default function ParticipantManager() {
           email: p.email,
           password: p.password || data.passwords.find((pw: any) => pw.email === p.email)?.password,
           name: p.name,
+          access_token: p.access_token,
         }))
         setImportedCredentials(creds)
       }
@@ -260,7 +262,14 @@ export default function ParticipantManager() {
                     }`}
                   />
                   <div>
-                    <div className="font-medium">{participant.name}</div>
+                    <div className="font-medium flex items-center gap-2">
+                      {participant.name}
+                      {participant.access_token && (
+                        <code className="bg-blue-900/50 text-blue-300 px-2 py-0.5 rounded text-xs font-mono">
+                          {participant.access_token}
+                        </code>
+                      )}
+                    </div>
                     <div className="text-sm text-gray-400">
                       {participant.email || 'No email'}
                       {participant.notes && ` - ${participant.notes}`}
@@ -492,7 +501,7 @@ Or paste directly from Excel (tab-separated)`}
 
             <div className="bg-yellow-900/30 border border-yellow-600 rounded-lg p-3 mb-4">
               <p className="text-yellow-200 text-sm">
-                Save these credentials now! Passwords are only shown once and cannot be retrieved later.
+                Save these credentials now! The <strong>Access Code</strong> is what participants enter on the landing page to launch their workspace.
               </p>
             </div>
 
@@ -506,13 +515,22 @@ Or paste directly from Excel (tab-separated)`}
                     <div className="font-medium truncate">{cred.name}</div>
                     <div className="text-sm text-gray-400 truncate">{cred.email}</div>
                   </div>
-                  <div className="flex items-center gap-2 ml-4">
-                    <code className="bg-gray-900 px-3 py-1 rounded font-mono text-emerald-400">
-                      {cred.password}
-                    </code>
+                  <div className="flex items-center gap-3 ml-4">
+                    <div className="text-center">
+                      <div className="text-xs text-gray-500 mb-1">Access Code</div>
+                      <code className="bg-blue-900/50 px-3 py-1 rounded font-mono text-blue-300 font-bold">
+                        {cred.access_token || '-'}
+                      </code>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-xs text-gray-500 mb-1">Password</div>
+                      <code className="bg-gray-900 px-3 py-1 rounded font-mono text-emerald-400">
+                        {cred.password}
+                      </code>
+                    </div>
                     <button
                       onClick={() => {
-                        navigator.clipboard.writeText(cred.password)
+                        navigator.clipboard.writeText(`${cred.access_token || ''}\t${cred.password}`)
                         setCopiedIndex(index)
                         setTimeout(() => setCopiedIndex(null), 2000)
                       }}
@@ -521,7 +539,7 @@ Or paste directly from Excel (tab-separated)`}
                           ? 'bg-green-600 text-white'
                           : 'bg-gray-600 hover:bg-gray-500'
                       }`}
-                      title="Copy password"
+                      title="Copy access code and password"
                     >
                       {copiedIndex === index ? (
                         <CheckCircle className="w-4 h-4" />
@@ -539,9 +557,9 @@ Or paste directly from Excel (tab-separated)`}
                 onClick={() => {
                   // Export as CSV
                   const csv = importedCredentials
-                    .map((c) => `${c.name},${c.email},${c.password}`)
+                    .map((c) => `${c.name},${c.email},${c.access_token || ''},${c.password}`)
                     .join('\n')
-                  const header = 'Name,Email,Password\n'
+                  const header = 'Name,Email,Access Code,Password\n'
                   const blob = new Blob([header + csv], { type: 'text/csv' })
                   const url = URL.createObjectURL(blob)
                   const a = document.createElement('a')

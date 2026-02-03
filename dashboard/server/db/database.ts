@@ -19,6 +19,7 @@ export interface Participant {
   instance_id: string | null; // null if unassigned
   password_hash: string;      // bcrypt hash
   password_plain?: string;    // Temporary for export/display, cleared after
+  access_token: string;       // 5-character alphanumeric access token for landing page
   created_at: string;
   updated_at: string;
 }
@@ -241,12 +242,15 @@ export function getAllConfig(): Record<string, string> {
 // Participant operations
 export function createParticipant(data: { name: string; email: string; notes?: string }): Participant {
   const db = loadDb();
+  const accessToken = generateAccessToken();
   const participant: Participant = {
     id: `p-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
     name: data.name,
     email: data.email,
     notes: data.notes,
     instance_id: null,
+    password_hash: '',
+    access_token: accessToken,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -257,15 +261,32 @@ export function createParticipant(data: { name: string; email: string; notes?: s
 
 export function createParticipants(dataArray: { name: string; email: string; notes?: string }[]): Participant[] {
   const db = loadDb();
-  const participants: Participant[] = dataArray.map((data, index) => ({
-    id: `p-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 5)}`,
-    name: data.name,
-    email: data.email,
-    notes: data.notes,
-    instance_id: null,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  }));
+  const usedTokens = new Set(db.participants.map(p => p.access_token).filter(Boolean));
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+  const participants: Participant[] = dataArray.map((data, index) => {
+    // Generate unique access token
+    let accessToken = '';
+    do {
+      accessToken = '';
+      for (let i = 0; i < 5; i++) {
+        accessToken += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+    } while (usedTokens.has(accessToken));
+    usedTokens.add(accessToken);
+
+    return {
+      id: `p-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 5)}`,
+      name: data.name,
+      email: data.email,
+      notes: data.notes,
+      instance_id: null,
+      password_hash: '',
+      access_token: accessToken,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  });
   db.participants.push(...participants);
   saveDb(db);
   return participants;
@@ -414,16 +435,52 @@ export function generatePassword(): string {
   return password;
 }
 
-// Create participants with auto-generated passwords
+// Generate a unique 5-character access token
+export function generateAccessToken(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Uppercase + numbers, no confusing chars
+  const db = loadDb();
+  const existingTokens = new Set(db.participants.map(p => p.access_token).filter(Boolean));
+
+  let token = '';
+  do {
+    token = '';
+    for (let i = 0; i < 5; i++) {
+      token += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+  } while (existingTokens.has(token)); // Ensure uniqueness
+
+  return token;
+}
+
+// Get participant by access token
+export function getParticipantByAccessToken(accessToken: string): Participant | undefined {
+  const db = loadDb();
+  const cleanToken = (accessToken || '').trim().toUpperCase();
+  return db.participants.find((p) => p.access_token === cleanToken);
+}
+
+// Create participants with auto-generated passwords and access tokens
 export function createParticipantsWithPasswords(
   dataArray: { name: string; email: string; notes?: string }[]
 ): { participants: Participant[]; passwords: { email: string; password: string }[] } {
   const db = loadDb();
   const passwords: { email: string; password: string }[] = [];
+  const usedTokens = new Set(db.participants.map(p => p.access_token).filter(Boolean));
 
   const participants: Participant[] = dataArray.map((data, index) => {
     const plainPassword = generatePassword();
     const passwordHash = bcrypt.hashSync(plainPassword, 10);
+
+    // Generate unique access token
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let accessToken = '';
+    do {
+      accessToken = '';
+      for (let i = 0; i < 5; i++) {
+        accessToken += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+    } while (usedTokens.has(accessToken));
+    usedTokens.add(accessToken);
 
     // Clean and normalize email
     const cleanEmail = (data.email || '').trim().toLowerCase();
@@ -440,6 +497,7 @@ export function createParticipantsWithPasswords(
       instance_id: null,
       password_hash: passwordHash,
       password_plain: plainPassword, // Include for immediate display
+      access_token: accessToken,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };

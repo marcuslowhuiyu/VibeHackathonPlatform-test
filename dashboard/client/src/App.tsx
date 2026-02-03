@@ -12,21 +12,24 @@ import OrphanedInstanceScanner from './components/OrphanedInstanceScanner'
 import AdminLoginPage from './components/auth/AdminLoginPage'
 import ParticipantLoginPage from './components/auth/ParticipantLoginPage'
 import ParticipantPortal from './components/portal/ParticipantPortal'
+import LandingPage from './components/LandingPage'
 import { api } from './lib/api'
 import { useAuth } from './hooks/useAuth'
 
 type Tab = 'instances' | 'participants' | 'settings' | 'setup'
-type Route = 'login' | 'portal' | 'portal-dashboard' | 'admin'
+type Route = 'landing' | 'login' | 'portal' | 'portal-dashboard' | 'admin'
 
 // Create a query client outside of the component
 const queryClient = new QueryClient()
 
 function getRouteFromHash(): Route {
   const hash = window.location.hash.slice(1) // Remove the '#'
+  if (hash === '' || hash === '/' || hash === '/landing') return 'landing'
   if (hash === '/portal' || hash === '/portal/') return 'portal'
   if (hash === '/portal/dashboard') return 'portal-dashboard'
   if (hash === '/login' || hash === '/login/') return 'login'
-  return 'admin' // Default to admin dashboard
+  if (hash === '/admin' || hash === '/admin/') return 'admin'
+  return 'landing' // Default to landing page
 }
 
 function AdminDashboard({ onLogout }: { onLogout: () => void }) {
@@ -264,7 +267,7 @@ function AppContent() {
     if (route === 'portal' || route === 'portal-dashboard') {
       window.location.hash = '#/portal/dashboard'
     } else {
-      window.location.hash = '#/'
+      window.location.hash = '#/admin'
     }
     // Force re-render
     setRoute(getRouteFromHash())
@@ -280,6 +283,19 @@ function AppContent() {
       window.location.hash = '#/login'
     }
     setRoute(getRouteFromHash())
+  }
+
+  // Landing page (default route)
+  if (route === 'landing') {
+    return (
+      <LandingPage
+        onSuccess={(token) => {
+          auth.login(token)
+          window.location.hash = '#/portal/dashboard'
+          setRoute('portal-dashboard')
+        }}
+      />
+    )
   }
 
   // Participant portal routes
@@ -302,19 +318,26 @@ function AppContent() {
   // Admin routes
   if (route === 'login') {
     if (auth.isAuthenticated && auth.isAdmin) {
-      window.location.hash = '#/'
+      window.location.hash = '#/admin'
       return null
     }
     return <AdminLoginPage onLogin={handleLogin} />
   }
 
-  // Admin dashboard (default route)
-  if (!auth.isAuthenticated || !auth.isAdmin) {
-    window.location.hash = '#/login'
-    return null
+  // Admin dashboard
+  if (route === 'admin') {
+    if (!auth.isAuthenticated || !auth.isAdmin) {
+      window.location.hash = '#/login'
+      return null
+    }
+    return <AdminDashboard onLogout={handleLogout} />
   }
 
-  return <AdminDashboard onLogout={handleLogout} />
+  return <LandingPage onSuccess={(token) => {
+    auth.login(token)
+    window.location.hash = '#/portal/dashboard'
+    setRoute('portal-dashboard')
+  }} />
 }
 
 function App() {

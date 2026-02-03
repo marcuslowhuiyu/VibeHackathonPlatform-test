@@ -39,6 +39,7 @@ npm-debug.log*
 # Local development
 local.md
 local.txt
+SETUP_LOG.md
 
 # Terraform state (if using infrastructure folder)
 infrastructure/*.tfstate

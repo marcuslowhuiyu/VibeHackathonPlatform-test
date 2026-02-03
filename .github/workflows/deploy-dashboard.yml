@@ -333,12 +333,12 @@ jobs:
           TASK_MEMORY="${{ needs.build.outputs.task_memory }}"
 
           # Set task family based on environment
+          # Always use NODE_ENV=production so static files are served
+          # Use ENVIRONMENT variable to distinguish staging vs production
           if [ "$ENVIRONMENT" == "staging" ]; then
             TASK_FAMILY="vibe-dashboard-staging"
-            NODE_ENV="staging"
           else
             TASK_FAMILY="vibe-dashboard"
-            NODE_ENV="production"
           fi
 
           # Use setup outputs if first-time, otherwise use infra outputs
@@ -365,7 +365,8 @@ jobs:
               "essential": true,
               "portMappings": [{"containerPort": 3001, "protocol": "tcp"}],
               "environment": [
-                {"name": "NODE_ENV", "value": "${NODE_ENV}"},
+                {"name": "NODE_ENV", "value": "production"},
+                {"name": "ENVIRONMENT", "value": "${ENVIRONMENT}"},
                 {"name": "PORT", "value": "3001"},
                 {"name": "DATA_DIR", "value": "/mnt/efs/data"}
               ],

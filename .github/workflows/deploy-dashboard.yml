@@ -2,7 +2,13 @@ name: Deploy to AWS
 
 on:
   push:
-    branches: [main, dev]
+    branches:
+      - main
+      - dev
+      - 'feature/**'
+      - 'bugfix/**'
+      - 'hotfix/**'
+      - 'test/**'
     paths:
       - 'dashboard/**'
       - 'cline-setup/**'
@@ -12,9 +18,10 @@ on:
       environment:
         description: 'Environment to deploy'
         required: false
-        default: 'production'
+        default: 'auto'
         type: choice
         options:
+          - auto
           - production
           - staging
 
@@ -27,48 +34,90 @@ env:
   CONTAINER_NAME: vibe-dashboard
 
 jobs:
-  # Fast job: Only build what changed
   build:
     name: Build Images
     runs-on: ubuntu-latest
     outputs:
       dashboard_image: ${{ steps.build-dashboard.outputs.image }}
       environment: ${{ steps.set-env.outputs.environment }}
+      environment_name: ${{ steps.set-env.outputs.environment_name }}
       ecs_service: ${{ steps.set-env.outputs.ecs_service }}
+      task_family: ${{ steps.set-env.outputs.task_family }}
+      tg_name: ${{ steps.set-env.outputs.tg_name }}
       task_cpu: ${{ steps.set-env.outputs.task_cpu }}
       task_memory: ${{ steps.set-env.outputs.task_memory }}
+      is_feature_branch: ${{ steps.set-env.outputs.is_feature_branch }}
+      branch_slug: ${{ steps.set-env.outputs.branch_slug }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2  # Need for change detection
+          fetch-depth: 2
 
       - name: Set environment variables
         id: set-env
         run: |
-          # Determine environment from branch or manual input
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ inputs.environment }}" == "staging" ]; then
-            ENVIRONMENT="staging"
-          elif [ "${{ github.ref_name }}" == "dev" ]; then
-            ENVIRONMENT="staging"
-          else
+          BRANCH="${{ github.ref_name }}"
+
+          # Create a slug from branch name (lowercase, replace special chars, truncate)
+          # AWS resource names have limits: target groups max 32 chars, services max 255
+          BRANCH_SLUG=$(echo "$BRANCH" | sed 's|/|-|g' | sed 's|[^a-zA-Z0-9-]||g' | tr '[:upper:]' '[:lower:]' | cut -c1-20)
+          echo "branch_slug=$BRANCH_SLUG" >> $GITHUB_OUTPUT
+
+          # Determine environment type
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ inputs.environment }}" != "auto" ]; then
+            # Manual dispatch with explicit environment
+            if [ "${{ inputs.environment }}" == "production" ]; then
+              ENVIRONMENT="production"
+              ENVIRONMENT_NAME="production"
+            else
+              ENVIRONMENT="staging"
+              ENVIRONMENT_NAME="staging"
+            fi
+            IS_FEATURE="false"
+          elif [ "$BRANCH" == "main" ]; then
             ENVIRONMENT="production"
+            ENVIRONMENT_NAME="production"
+            IS_FEATURE="false"
+          elif [ "$BRANCH" == "dev" ]; then
+            ENVIRONMENT="staging"
+            ENVIRONMENT_NAME="staging"
+            IS_FEATURE="false"
+          else
+            # Feature/test branch - gets its own environment
+            ENVIRONMENT="test"
+            ENVIRONMENT_NAME="test-$BRANCH_SLUG"
+            IS_FEATURE="true"
           fi
 
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+          echo "environment_name=$ENVIRONMENT_NAME" >> $GITHUB_OUTPUT
+          echo "is_feature_branch=$IS_FEATURE" >> $GITHUB_OUTPUT
 
-          if [ "$ENVIRONMENT" == "staging" ]; then
+          # Set resource names and sizing based on environment
+          if [ "$ENVIRONMENT" == "production" ]; then
+            echo "ecs_service=vibe-dashboard-service" >> $GITHUB_OUTPUT
+            echo "task_family=vibe-dashboard" >> $GITHUB_OUTPUT
+            echo "tg_name=vibe-dashboard-tg" >> $GITHUB_OUTPUT
+            echo "task_cpu=512" >> $GITHUB_OUTPUT
+            echo "task_memory=1024" >> $GITHUB_OUTPUT
+          elif [ "$ENVIRONMENT" == "staging" ]; then
             echo "ecs_service=vibe-dashboard-staging" >> $GITHUB_OUTPUT
+            echo "task_family=vibe-dashboard-staging" >> $GITHUB_OUTPUT
+            echo "tg_name=vibe-dashboard-staging-tg" >> $GITHUB_OUTPUT
             echo "task_cpu=256" >> $GITHUB_OUTPUT
             echo "task_memory=512" >> $GITHUB_OUTPUT
           else
-            echo "ecs_service=vibe-dashboard-service" >> $GITHUB_OUTPUT
-            echo "task_cpu=512" >> $GITHUB_OUTPUT
-            echo "task_memory=1024" >> $GITHUB_OUTPUT
+            # Feature branch - minimal resources
+            echo "ecs_service=vibe-test-$BRANCH_SLUG" >> $GITHUB_OUTPUT
+            echo "task_family=vibe-test-$BRANCH_SLUG" >> $GITHUB_OUTPUT
+            echo "tg_name=vibe-test-$BRANCH_SLUG-tg" >> $GITHUB_OUTPUT
+            echo "task_cpu=256" >> $GITHUB_OUTPUT
+            echo "task_memory=512" >> $GITHUB_OUTPUT
           fi
 
-          echo "Deploying to: $ENVIRONMENT"
+          echo "Deploying branch '$BRANCH' as environment: $ENVIRONMENT_NAME"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -157,17 +206,11 @@ jobs:
           ECS_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=vibe-dashboard-ecs-sg" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
           echo "ecs_sg_id=$ECS_SG_ID" >> $GITHUB_OUTPUT
 
-          # Get target group (production or staging based on environment)
-          ENVIRONMENT="${{ needs.build.outputs.environment }}"
-          if [ "$ENVIRONMENT" == "staging" ]; then
-            TG_NAME="vibe-dashboard-staging-tg"
-          else
-            TG_NAME="vibe-dashboard-tg"
-          fi
+          # Get target group for this environment
+          TG_NAME="${{ needs.build.outputs.tg_name }}"
           TG_ARN=$(aws elbv2 describe-target-groups --names $TG_NAME --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "")
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
           echo "tg_name=$TG_NAME" >> $GITHUB_OUTPUT
-          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
 
           # Get EFS
           EFS_ID=$(aws efs describe-file-systems --creation-token vibe-dashboard-efs --query "FileSystems[0].FileSystemId" --output text 2>/dev/null || echo "")
@@ -176,11 +219,18 @@ jobs:
           AP_ID=$(aws efs describe-access-points --file-system-id $EFS_ID --query "AccessPoints[0].AccessPointId" --output text 2>/dev/null || echo "")
           echo "ap_id=$AP_ID" >> $GITHUB_OUTPUT
 
-          # Check if first-time setup needed (include EFS and access point check)
-          if [ -z "$ECS_SG_ID" ] || [ "$ECS_SG_ID" == "None" ] || [ -z "$TG_ARN" ] || [ "$TG_ARN" == "None" ] || [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ] || [ -z "$AP_ID" ] || [ "$AP_ID" == "None" ]; then
+          # Check if first-time setup needed (core infrastructure)
+          if [ -z "$ECS_SG_ID" ] || [ "$ECS_SG_ID" == "None" ] || [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ] || [ -z "$AP_ID" ] || [ "$AP_ID" == "None" ]; then
             echo "needs_setup=true" >> $GITHUB_OUTPUT
           else
             echo "needs_setup=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Check if this specific environment's target group exists
+          if [ -z "$TG_ARN" ] || [ "$TG_ARN" == "None" ]; then
+            echo "needs_tg_setup=true" >> $GITHUB_OUTPUT
+          else
+            echo "needs_tg_setup=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Checkout for first-time setup
@@ -228,7 +278,7 @@ jobs:
           ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].DNSName' --output text)
           echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
 
-          # Create target group
+          # Create default target group (for production)
           TG_ARN=$(aws elbv2 describe-target-groups --names vibe-dashboard-tg --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
           if [ "$TG_ARN" == "None" ]; then
             TG_ARN=$(aws elbv2 create-target-group --name vibe-dashboard-tg --protocol HTTP --port 3001 --vpc-id $VPC_ID --target-type ip --health-check-path /api/health --query 'TargetGroups[0].TargetGroupArn' --output text)
@@ -245,7 +295,6 @@ jobs:
           EFS_ID=$(aws efs describe-file-systems --creation-token vibe-dashboard-efs --query "FileSystems[0].FileSystemId" --output text 2>/dev/null || echo "None")
           if [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ]; then
             EFS_ID=$(aws efs create-file-system --creation-token vibe-dashboard-efs --performance-mode generalPurpose --encrypted --query 'FileSystemId' --output text)
-            # Wait for EFS to be available (polling since aws efs wait doesn't exist)
             echo "Waiting for EFS $EFS_ID to be available..."
             while true; do
               STATUS=$(aws efs describe-file-systems --file-system-id $EFS_ID --query 'FileSystems[0].LifeCycleState' --output text)
@@ -280,22 +329,26 @@ jobs:
 
           aws iam put-role-policy --role-name ecsTaskRole --policy-name efs-access --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"elasticfilesystem:ClientMount\",\"elasticfilesystem:ClientWrite\",\"elasticfilesystem:ClientRootAccess\"],\"Resource\":\"arn:aws:elasticfilesystem:${{ env.AWS_REGION }}:${AWS_ACCOUNT_ID}:file-system/${EFS_ID}\"}]}"
 
-      - name: Setup staging infrastructure
-        if: needs.build.outputs.environment == 'staging'
-        id: staging-setup
+      - name: Setup environment-specific target group and routing
+        id: env-setup
         run: |
           VPC_ID="${{ steps.infra.outputs.vpc_id }}"
+          ENVIRONMENT="${{ needs.build.outputs.environment }}"
+          TG_NAME="${{ needs.build.outputs.tg_name }}"
+          BRANCH_SLUG="${{ needs.build.outputs.branch_slug }}"
 
           # Get ALB ARN and listener
           ALB_ARN=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text)
           LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text)
+          echo "listener_arn=$LISTENER_ARN" >> $GITHUB_OUTPUT
 
-          # Create staging target group if not exists
-          TG_ARN=$(aws elbv2 describe-target-groups --names vibe-dashboard-staging-tg --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
+          # Check if target group exists
+          TG_ARN=$(aws elbv2 describe-target-groups --names $TG_NAME --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
+
           if [ "$TG_ARN" == "None" ] || [ -z "$TG_ARN" ]; then
-            echo "Creating staging target group..."
+            echo "Creating target group: $TG_NAME"
             TG_ARN=$(aws elbv2 create-target-group \
-              --name vibe-dashboard-staging-tg \
+              --name $TG_NAME \
               --protocol HTTP --port 3001 \
               --vpc-id $VPC_ID --target-type ip \
               --health-check-path /api/health \
@@ -303,18 +356,57 @@ jobs:
           fi
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
 
-          # Check if header-based routing rule exists for staging
-          RULE_EXISTS=$(aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
-            --query "Rules[?Conditions[?HttpHeaderConfig.HttpHeaderName=='X-Environment']].RuleArn" \
-            --output text 2>/dev/null || echo "")
+          # Set up routing rules based on environment type
+          if [ "$ENVIRONMENT" == "production" ]; then
+            # Production is the default route - no special rule needed
+            echo "Production uses default listener rule"
+          elif [ "$ENVIRONMENT" == "staging" ]; then
+            # Staging uses header-based routing
+            RULE_EXISTS=$(aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
+              --query "Rules[?Conditions[?HttpHeaderConfig.HttpHeaderName=='X-Environment' && contains(HttpHeaderConfig.Values, 'staging')]].RuleArn" \
+              --output text 2>/dev/null || echo "")
 
-          if [ -z "$RULE_EXISTS" ]; then
-            echo "Creating header-based routing rule for staging..."
-            aws elbv2 create-rule \
-              --listener-arn $LISTENER_ARN \
-              --conditions Field=http-header,HttpHeaderConfig="{HttpHeaderName=X-Environment,Values=[staging]}" \
-              --actions Type=forward,TargetGroupArn=$TG_ARN \
-              --priority 10
+            if [ -z "$RULE_EXISTS" ] || [ "$RULE_EXISTS" == "None" ]; then
+              echo "Creating header-based routing rule for staging..."
+              aws elbv2 create-rule \
+                --listener-arn $LISTENER_ARN \
+                --conditions Field=http-header,HttpHeaderConfig="{HttpHeaderName=X-Environment,Values=[staging]}" \
+                --actions Type=forward,TargetGroupArn=$TG_ARN \
+                --priority 10
+            fi
+          else
+            # Feature/test branches use path-based routing: /test/<branch-slug>/*
+            # Check if path-based rule exists for this branch
+            RULE_EXISTS=$(aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
+              --query "Rules[?Conditions[?PathPatternConfig.Values[?contains(@, '/test/$BRANCH_SLUG')]]]" \
+              --output text 2>/dev/null || echo "")
+
+            if [ -z "$RULE_EXISTS" ] || [ "$RULE_EXISTS" == "None" ] || [ "$RULE_EXISTS" == "[]" ]; then
+              echo "Creating path-based routing rule for test environment: /test/$BRANCH_SLUG/*"
+
+              # Find an available priority (start from 100 for test environments)
+              PRIORITY=100
+              while true; do
+                PRIORITY_EXISTS=$(aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
+                  --query "Rules[?Priority=='$PRIORITY'].RuleArn" --output text 2>/dev/null || echo "")
+                if [ -z "$PRIORITY_EXISTS" ] || [ "$PRIORITY_EXISTS" == "None" ]; then
+                  break
+                fi
+                PRIORITY=$((PRIORITY + 1))
+                if [ $PRIORITY -gt 500 ]; then
+                  echo "Error: Could not find available priority"
+                  exit 1
+                fi
+              done
+
+              aws elbv2 create-rule \
+                --listener-arn $LISTENER_ARN \
+                --conditions Field=path-pattern,PathPatternConfig="{Values=[/test/$BRANCH_SLUG,/test/$BRANCH_SLUG/*]}" \
+                --actions Type=forward,TargetGroupArn=$TG_ARN \
+                --priority $PRIORITY
+
+              echo "Created rule with priority $PRIORITY"
+            fi
           fi
 
       - name: Get ECR registry
@@ -329,17 +421,11 @@ jobs:
           AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           ECR_REGISTRY="${{ steps.ecr.outputs.registry }}"
           ENVIRONMENT="${{ needs.build.outputs.environment }}"
+          ENVIRONMENT_NAME="${{ needs.build.outputs.environment_name }}"
+          TASK_FAMILY="${{ needs.build.outputs.task_family }}"
           TASK_CPU="${{ needs.build.outputs.task_cpu }}"
           TASK_MEMORY="${{ needs.build.outputs.task_memory }}"
-
-          # Set task family based on environment
-          # Always use NODE_ENV=production so static files are served
-          # Use ENVIRONMENT variable to distinguish staging vs production
-          if [ "$ENVIRONMENT" == "staging" ]; then
-            TASK_FAMILY="vibe-dashboard-staging"
-          else
-            TASK_FAMILY="vibe-dashboard"
-          fi
+          BRANCH_SLUG="${{ needs.build.outputs.branch_slug }}"
 
           # Use setup outputs if first-time, otherwise use infra outputs
           if [ "${{ steps.infra.outputs.needs_setup }}" == "true" ]; then
@@ -348,6 +434,13 @@ jobs:
           else
             EFS_ID="${{ steps.infra.outputs.efs_id }}"
             AP_ID="${{ steps.infra.outputs.ap_id }}"
+          fi
+
+          # Set base path for test environments (for path-based routing)
+          if [ "$ENVIRONMENT" == "test" ]; then
+            BASE_PATH="/test/$BRANCH_SLUG"
+          else
+            BASE_PATH=""
           fi
 
           cat > task-def.json << EOF
@@ -367,8 +460,10 @@ jobs:
               "environment": [
                 {"name": "NODE_ENV", "value": "production"},
                 {"name": "ENVIRONMENT", "value": "${ENVIRONMENT}"},
+                {"name": "ENVIRONMENT_NAME", "value": "${ENVIRONMENT_NAME}"},
                 {"name": "PORT", "value": "3001"},
-                {"name": "DATA_DIR", "value": "/mnt/efs/data"}
+                {"name": "DATA_DIR", "value": "/mnt/efs/data"},
+                {"name": "BASE_PATH", "value": "${BASE_PATH}"}
               ],
               "mountPoints": [{"sourceVolume": "efs-data", "containerPath": "/mnt/efs/data", "readOnly": false}],
               "logConfiguration": {
@@ -403,6 +498,7 @@ jobs:
         run: |
           ENVIRONMENT="${{ needs.build.outputs.environment }}"
           ECS_SERVICE_NAME="${{ needs.build.outputs.ecs_service }}"
+          TG_ARN="${{ steps.env-setup.outputs.tg_arn }}"
 
           # Get security group
           if [ "${{ steps.infra.outputs.needs_setup }}" == "true" ]; then
@@ -411,18 +507,9 @@ jobs:
             ECS_SG_ID="${{ steps.infra.outputs.ecs_sg_id }}"
           fi
 
-          # Get target group (staging uses staging-setup output if available)
-          if [ "$ENVIRONMENT" == "staging" ] && [ -n "${{ steps.staging-setup.outputs.tg_arn }}" ]; then
-            TG_ARN="${{ steps.staging-setup.outputs.tg_arn }}"
-          elif [ "${{ steps.infra.outputs.needs_setup }}" == "true" ]; then
-            TG_ARN="${{ steps.setup.outputs.tg_arn }}"
-          else
-            TG_ARN="${{ steps.infra.outputs.tg_arn }}"
-          fi
-
           SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
 
-          echo "Deploying $ENVIRONMENT environment..."
+          echo "Deploying environment: ${{ needs.build.outputs.environment_name }}"
           echo "Service: $ECS_SERVICE_NAME"
           echo "Target Group: $TG_ARN"
 
@@ -479,25 +566,33 @@ jobs:
       - name: Output URLs
         run: |
           ENVIRONMENT="${{ needs.build.outputs.environment }}"
+          ENVIRONMENT_NAME="${{ needs.build.outputs.environment_name }}"
           ECS_SERVICE_NAME="${{ needs.build.outputs.ecs_service }}"
+          BRANCH_SLUG="${{ needs.build.outputs.branch_slug }}"
           ALB_DNS=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].DNSName' --output text)
           CF_DOMAIN=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[0].DomainName=='$ALB_DNS'].DomainName" --output text 2>/dev/null || echo "")
 
           echo ""
           echo "========================================"
-          echo "  ${ENVIRONMENT^^} DEPLOYMENT COMPLETE!"
+          echo "  DEPLOYMENT COMPLETE!"
           echo "========================================"
           echo ""
-          echo "  Environment: $ENVIRONMENT"
+          echo "  Environment: $ENVIRONMENT_NAME"
           echo "  Service: $ECS_SERVICE_NAME"
+          echo "  Branch: ${{ github.ref_name }}"
           echo ""
-          if [ "$ENVIRONMENT" == "staging" ]; then
-            echo "  Access staging via header:"
-            echo "  curl -H 'X-Environment: staging' http://$ALB_DNS/api/health"
-          else
+          if [ "$ENVIRONMENT" == "production" ]; then
             if [ -n "$CF_DOMAIN" ] && [ "$CF_DOMAIN" != "None" ]; then
               echo "  HTTPS: https://$CF_DOMAIN"
             fi
             echo "  HTTP:  http://$ALB_DNS"
+          elif [ "$ENVIRONMENT" == "staging" ]; then
+            echo "  Access staging via header:"
+            echo "  curl -H 'X-Environment: staging' http://$ALB_DNS/api/health"
+          else
+            echo "  Test Environment URL:"
+            echo "  http://$ALB_DNS/test/$BRANCH_SLUG/"
+            echo ""
+            echo "  Note: Access your test environment at /test/$BRANCH_SLUG/"
           fi
           echo "========================================"

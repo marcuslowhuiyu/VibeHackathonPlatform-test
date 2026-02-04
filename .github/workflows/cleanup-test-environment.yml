@@ -1,0 +1,148 @@
+name: Cleanup Test Environment
+
+on:
+  delete:
+    branches:
+      - 'feature/**'
+      - 'bugfix/**'
+      - 'hotfix/**'
+      - 'test/**'
+
+env:
+  AWS_REGION: ap-southeast-1
+  ECS_CLUSTER: vibe-cluster
+
+jobs:
+  cleanup:
+    name: Cleanup AWS Resources
+    runs-on: ubuntu-latest
+    # Only run for branch deletions (not tag deletions)
+    if: github.event.ref_type == 'branch'
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Generate branch slug
+        id: branch
+        run: |
+          BRANCH="${{ github.event.ref }}"
+          # Create the same slug as the deploy workflow
+          BRANCH_SLUG=$(echo "$BRANCH" | sed 's|/|-|g' | sed 's|[^a-zA-Z0-9-]||g' | tr '[:upper:]' '[:lower:]' | cut -c1-20)
+          echo "branch_slug=$BRANCH_SLUG" >> $GITHUB_OUTPUT
+          echo "Cleaning up resources for branch: $BRANCH (slug: $BRANCH_SLUG)"
+
+      - name: Delete ECS Service
+        continue-on-error: true
+        run: |
+          BRANCH_SLUG="${{ steps.branch.outputs.branch_slug }}"
+          SERVICE_NAME="vibe-test-$BRANCH_SLUG"
+
+          echo "Checking for ECS service: $SERVICE_NAME"
+
+          # Check if service exists
+          SERVICE_STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $SERVICE_NAME --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+
+          if [ "$SERVICE_STATUS" != "MISSING" ] && [ "$SERVICE_STATUS" != "None" ]; then
+            echo "Stopping and deleting ECS service: $SERVICE_NAME"
+
+            # Scale down to 0 first
+            aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service $SERVICE_NAME --desired-count 0 2>/dev/null || true
+
+            # Delete the service
+            aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service $SERVICE_NAME --force
+
+            echo "ECS service deleted"
+          else
+            echo "ECS service not found, skipping"
+          fi
+
+      - name: Delete ALB Listener Rule
+        continue-on-error: true
+        run: |
+          BRANCH_SLUG="${{ steps.branch.outputs.branch_slug }}"
+
+          echo "Looking for ALB listener rule for /test/$BRANCH_SLUG"
+
+          # Get ALB and listener
+          ALB_ARN=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
+
+          if [ "$ALB_ARN" != "None" ] && [ -n "$ALB_ARN" ]; then
+            LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text 2>/dev/null || echo "")
+
+            if [ -n "$LISTENER_ARN" ] && [ "$LISTENER_ARN" != "None" ]; then
+              # Find and delete the rule for this branch
+              RULE_ARN=$(aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
+                --query "Rules[?Conditions[?PathPatternConfig.Values[?contains(@, '/test/$BRANCH_SLUG')]]].RuleArn" \
+                --output text 2>/dev/null || echo "")
+
+              if [ -n "$RULE_ARN" ] && [ "$RULE_ARN" != "None" ]; then
+                echo "Deleting ALB listener rule: $RULE_ARN"
+                aws elbv2 delete-rule --rule-arn $RULE_ARN
+                echo "ALB listener rule deleted"
+              else
+                echo "No ALB listener rule found for this branch"
+              fi
+            fi
+          fi
+
+      - name: Delete Target Group
+        continue-on-error: true
+        run: |
+          BRANCH_SLUG="${{ steps.branch.outputs.branch_slug }}"
+          TG_NAME="vibe-test-$BRANCH_SLUG-tg"
+
+          echo "Looking for target group: $TG_NAME"
+
+          TG_ARN=$(aws elbv2 describe-target-groups --names $TG_NAME --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
+
+          if [ "$TG_ARN" != "None" ] && [ -n "$TG_ARN" ]; then
+            echo "Deleting target group: $TG_NAME"
+            aws elbv2 delete-target-group --target-group-arn $TG_ARN
+            echo "Target group deleted"
+          else
+            echo "Target group not found, skipping"
+          fi
+
+      - name: Deregister Task Definitions
+        continue-on-error: true
+        run: |
+          BRANCH_SLUG="${{ steps.branch.outputs.branch_slug }}"
+          TASK_FAMILY="vibe-test-$BRANCH_SLUG"
+
+          echo "Looking for task definitions in family: $TASK_FAMILY"
+
+          # List all task definitions for this family
+          TASK_DEFS=$(aws ecs list-task-definitions --family-prefix $TASK_FAMILY --query 'taskDefinitionArns[]' --output text 2>/dev/null || echo "")
+
+          if [ -n "$TASK_DEFS" ]; then
+            for TASK_DEF in $TASK_DEFS; do
+              echo "Deregistering task definition: $TASK_DEF"
+              aws ecs deregister-task-definition --task-definition $TASK_DEF --no-cli-pager
+            done
+            echo "Task definitions deregistered"
+          else
+            echo "No task definitions found for this family"
+          fi
+
+      - name: Cleanup Summary
+        run: |
+          BRANCH_SLUG="${{ steps.branch.outputs.branch_slug }}"
+          echo ""
+          echo "========================================"
+          echo "  CLEANUP COMPLETE"
+          echo "========================================"
+          echo ""
+          echo "  Branch: ${{ github.event.ref }}"
+          echo "  Slug: $BRANCH_SLUG"
+          echo ""
+          echo "  Resources cleaned up:"
+          echo "  - ECS Service: vibe-test-$BRANCH_SLUG"
+          echo "  - Target Group: vibe-test-$BRANCH_SLUG-tg"
+          echo "  - ALB Rule: /test/$BRANCH_SLUG/*"
+          echo "  - Task Definitions: vibe-test-$BRANCH_SLUG"
+          echo "========================================"

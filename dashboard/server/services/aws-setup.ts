@@ -18,7 +18,13 @@ import {
   PutRolePolicyCommand,
   AttachRolePolicyCommand,
   GetRoleCommand,
+  DeleteRolePolicyCommand,
 } from '@aws-sdk/client-iam';
+import {
+  CodeBuildClient,
+  CreateProjectCommand,
+  BatchGetProjectsCommand,
+} from '@aws-sdk/client-codebuild';
 import {
   ECRClient,
   CreateRepositoryCommand,
@@ -82,6 +88,7 @@ function getClients() {
     iam: new IAMClient(config),
     ecr: new ECRClient(config),
     sts: new STSClient(config),
+    codebuild: new CodeBuildClient(config),
   };
 }
 
@@ -120,6 +127,54 @@ const CLOUDWATCH_LOGS_POLICY = JSON.stringify({
     Resource: ['arn:aws:logs:*:*:log-group:/ecs/*'],
   }],
 });
+
+// CodeBuild trust policy
+const CODEBUILD_TRUST_POLICY = JSON.stringify({
+  Version: '2012-10-17',
+  Statement: [{
+    Effect: 'Allow',
+    Principal: { Service: 'codebuild.amazonaws.com' },
+    Action: 'sts:AssumeRole',
+  }],
+});
+
+// CodeBuild permissions policy (ECR, CloudWatch Logs, S3)
+function getCodeBuildPolicy(accountId: string, region: string): string {
+  return JSON.stringify({
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Effect: 'Allow',
+        Action: [
+          'ecr:GetAuthorizationToken',
+        ],
+        Resource: '*',
+      },
+      {
+        Effect: 'Allow',
+        Action: [
+          'ecr:BatchCheckLayerAvailability',
+          'ecr:GetDownloadUrlForLayer',
+          'ecr:BatchGetImage',
+          'ecr:PutImage',
+          'ecr:InitiateLayerUpload',
+          'ecr:UploadLayerPart',
+          'ecr:CompleteLayerUpload',
+        ],
+        Resource: `arn:aws:ecr:${region}:${accountId}:repository/vibe-coding-lab`,
+      },
+      {
+        Effect: 'Allow',
+        Action: [
+          'logs:CreateLogGroup',
+          'logs:CreateLogStream',
+          'logs:PutLogEvents',
+        ],
+        Resource: `arn:aws:logs:${region}:${accountId}:log-group:/aws/codebuild/*`,
+      },
+    ],
+  });
+}
 
 export async function runFullSetup(
   onProgress?: (step: SetupStatus) => void
@@ -335,6 +390,109 @@ export async function runFullSetup(
     }));
     report({ step: 'register_task_definition', status: 'completed', message: 'Registered task definition', resourceId: taskDefinitionFamily });
 
+    // Step 9: Create CodeBuild service role
+    report({ step: 'create_codebuild_role', status: 'in_progress', message: 'Creating CodeBuild service role...' });
+    let codebuildRoleArn: string;
+    const codebuildRoleName = 'vibe-codebuild-service-role';
+    try {
+      const existingRole = await clients.iam.send(new GetRoleCommand({ RoleName: codebuildRoleName }));
+      codebuildRoleArn = existingRole.Role!.Arn!;
+      // Update the policy in case it changed
+      try {
+        await clients.iam.send(new PutRolePolicyCommand({
+          RoleName: codebuildRoleName,
+          PolicyName: 'CodeBuildPermissions',
+          PolicyDocument: getCodeBuildPolicy(accountId, creds.region),
+        }));
+      } catch {
+        // Policy update failed, but role exists
+      }
+      report({ step: 'create_codebuild_role', status: 'skipped', message: 'CodeBuild role already exists', resourceId: codebuildRoleArn });
+    } catch {
+      const roleResponse = await clients.iam.send(new CreateRoleCommand({
+        RoleName: codebuildRoleName,
+        AssumeRolePolicyDocument: CODEBUILD_TRUST_POLICY,
+        Description: 'Service role for Vibe Coding Lab CodeBuild project',
+      }));
+      codebuildRoleArn = roleResponse.Role!.Arn!;
+      await clients.iam.send(new PutRolePolicyCommand({
+        RoleName: codebuildRoleName,
+        PolicyName: 'CodeBuildPermissions',
+        PolicyDocument: getCodeBuildPolicy(accountId, creds.region),
+      }));
+      report({ step: 'create_codebuild_role', status: 'completed', message: 'Created CodeBuild service role', resourceId: codebuildRoleArn });
+      // Wait a moment for IAM role to propagate
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+
+    // Step 10: Create CodeBuild project
+    report({ step: 'create_codebuild_project', status: 'in_progress', message: 'Creating CodeBuild project...' });
+    const codebuildProjectName = 'vibe-coding-lab-builder';
+    try {
+      const existingProject = await clients.codebuild.send(new BatchGetProjectsCommand({
+        names: [codebuildProjectName],
+      }));
+      if (existingProject.projects && existingProject.projects.length > 0) {
+        report({ step: 'create_codebuild_project', status: 'skipped', message: 'CodeBuild project already exists', resourceId: codebuildProjectName });
+      } else {
+        throw new Error('Not found');
+      }
+    } catch {
+      // Create buildspec that builds both Continue and Cline images
+      const buildspec = `version: 0.2
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+  build:
+    commands:
+      - echo "=== Building Continue extension from cline-setup/ ==="
+      - cd cline-setup
+      - docker build -t vibe-coding-lab:continue .
+      - docker tag vibe-coding-lab:continue $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
+      - docker tag vibe-coding-lab:continue $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
+      - cd ..
+      - echo "=== Building Cline extension from cline-ai/ ==="
+      - cd cline-ai
+      - docker build -t vibe-coding-lab:cline .
+      - docker tag vibe-coding-lab:cline $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
+      - cd ..
+  post_build:
+    commands:
+      - echo Pushing the Docker images...
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
+      - echo Build completed
+`;
+
+      await clients.codebuild.send(new CreateProjectCommand({
+        name: codebuildProjectName,
+        description: 'Builds Vibe Coding Lab Docker images (Continue and Cline)',
+        source: {
+          type: 'GITHUB',
+          location: 'https://github.com/marcuslowhuiyu/VibeHackathonPlatform.git',
+          buildspec: buildspec,
+        },
+        artifacts: {
+          type: 'NO_ARTIFACTS',
+        },
+        environment: {
+          type: 'LINUX_CONTAINER',
+          computeType: 'BUILD_GENERAL1_MEDIUM',
+          image: 'aws/codebuild/amazonlinux2-x86_64-standard:5.0',
+          privilegedMode: true,
+          environmentVariables: [
+            { name: 'AWS_ACCOUNT_ID', value: accountId },
+            { name: 'AWS_DEFAULT_REGION', value: creds.region },
+          ],
+        },
+        serviceRole: codebuildRoleArn,
+      }));
+      report({ step: 'create_codebuild_project', status: 'completed', message: 'Created CodeBuild project', resourceId: codebuildProjectName });
+    }
+
     // Save config to database
     const config = {
       cluster_name: clusterName,
@@ -489,6 +647,18 @@ export async function checkSetupStatus(): Promise<{
       await clients.iam.send(new GetRoleCommand({ RoleName: 'vibeTaskRole' }));
     } catch {
       missing.push('ECS task role');
+    }
+
+    // Check CodeBuild project
+    try {
+      const project = await clients.codebuild.send(new BatchGetProjectsCommand({
+        names: ['vibe-coding-lab-builder'],
+      }));
+      if (!project.projects || project.projects.length === 0) {
+        missing.push('CodeBuild project');
+      }
+    } catch {
+      missing.push('CodeBuild project');
     }
 
     return {

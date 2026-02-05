@@ -41,6 +41,8 @@ const STEP_LABELS: Record<string, { label: string; icon: React.ReactNode }> = {
   create_ecr_repo: { label: 'Create ECR Repository', icon: <Database className="w-4 h-4" /> },
   create_cluster: { label: 'Create ECS Cluster', icon: <Box className="w-4 h-4" /> },
   register_task_definition: { label: 'Register Task Definition', icon: <Box className="w-4 h-4" /> },
+  create_codebuild_role: { label: 'Create CodeBuild Role', icon: <Shield className="w-4 h-4" /> },
+  create_codebuild_project: { label: 'Create CodeBuild Project', icon: <Terminal className="w-4 h-4" /> },
   save_config: { label: 'Save Configuration', icon: <CheckCircle className="w-4 h-4" /> },
 }
 

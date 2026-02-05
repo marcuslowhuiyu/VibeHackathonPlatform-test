@@ -393,7 +393,7 @@ export async function runFullSetup(
     // Step 9: Create CodeBuild service role
     report({ step: 'create_codebuild_role', status: 'in_progress', message: 'Creating CodeBuild service role...' });
     let codebuildRoleArn: string;
-    const codebuildRoleName = 'vibe-codebuild-service-role';
+    const codebuildRoleName = 'codebuild-vibe-service-role';
     try {
       const existingRole = await clients.iam.send(new GetRoleCommand({ RoleName: codebuildRoleName }));
       codebuildRoleArn = existingRole.Role!.Arn!;

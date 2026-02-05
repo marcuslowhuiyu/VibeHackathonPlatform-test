@@ -6,7 +6,6 @@ import {
   UpdateDistributionCommand,
   ListDistributionsCommand,
 } from '@aws-sdk/client-cloudfront';
-import { getCredentials } from '../db/database.js';
 
 export interface CloudFrontDistribution {
   distributionId: string;
@@ -15,19 +14,10 @@ export interface CloudFrontDistribution {
   originDomain: string;
 }
 
+// Use default credentials from ECS task role - CloudFront is a global service
 function getCloudFrontClient(): CloudFrontClient {
-  const creds = getCredentials();
-  if (!creds) {
-    throw new Error('AWS credentials not configured');
-  }
-
-  // CloudFront is a global service, but we use us-east-1 for API calls
   return new CloudFrontClient({
     region: 'us-east-1',
-    credentials: {
-      accessKeyId: creds.access_key_id,
-      secretAccessKey: creds.secret_access_key,
-    },
   });
 }
 

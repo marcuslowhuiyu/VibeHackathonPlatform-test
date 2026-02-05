@@ -23,25 +23,6 @@ export interface Instance {
   public_ip?: string
 }
 
-export interface Credentials {
-  configured: boolean
-  accessKeyId?: string
-  region?: string
-}
-
-export interface PermissionCheck {
-  service: string
-  permission: string
-  status: 'granted' | 'denied' | 'error'
-  message: string
-}
-
-export interface ValidateCredentialsResult {
-  valid: boolean
-  message: string
-  permissions?: PermissionCheck[]
-}
-
 export interface Config {
   cluster_name: string
   task_definition: string
@@ -214,27 +195,6 @@ export const api = {
     fetchJson<{ success: boolean }>(`/instances/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
-    }),
-
-  // Credentials
-  getCredentials: () => fetchJson<Credentials>('/credentials'),
-
-  saveCredentials: (creds: {
-    accessKeyId: string
-    secretAccessKey: string
-    region: string
-  }) =>
-    fetchJson<{ success: boolean }>('/credentials', {
-      method: 'POST',
-      body: JSON.stringify(creds),
-    }),
-
-  validateCredentials: () =>
-    fetchJson<ValidateCredentialsResult>('/credentials/validate'),
-
-  deleteCredentials: () =>
-    fetchJson<{ success: boolean }>('/credentials', {
-      method: 'DELETE',
     }),
 
   // Config

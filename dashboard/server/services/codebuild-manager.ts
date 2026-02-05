@@ -5,21 +5,12 @@ import {
   BatchGetProjectsCommand,
   CreateProjectCommand,
 } from '@aws-sdk/client-codebuild';
-import { getCredentials } from '../db/database.js';
+
+// Use default credentials from ECS task role
+const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-southeast-1';
 
 function getClient(): CodeBuildClient {
-  const creds = getCredentials();
-  if (!creds) {
-    throw new Error('AWS credentials not configured');
-  }
-
-  return new CodeBuildClient({
-    region: creds.region,
-    credentials: {
-      accessKeyId: creds.access_key_id,
-      secretAccessKey: creds.secret_access_key,
-    },
-  });
+  return new CodeBuildClient({ region: AWS_REGION });
 }
 
 const PROJECT_NAME = 'vibe-coding-lab-builder';
@@ -55,8 +46,6 @@ export async function createProject(
   githubRepo: string
 ): Promise<void> {
   const client = getClient();
-  const creds = getCredentials();
-  if (!creds) throw new Error('AWS credentials not configured');
 
   // Create the buildspec inline - builds both Continue and Cline extensions
   const buildspec = `version: 0.2
@@ -111,7 +100,7 @@ phases:
           },
           {
             name: 'AWS_DEFAULT_REGION',
-            value: creds.region,
+            value: AWS_REGION,
           },
         ],
       },

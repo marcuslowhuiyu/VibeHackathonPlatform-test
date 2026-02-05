@@ -348,7 +348,99 @@ jobs:
             aws iam create-role --role-name ecsTaskRole --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
           }
 
+          # EFS access
           aws iam put-role-policy --role-name ecsTaskRole --policy-name efs-access --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"elasticfilesystem:ClientMount\",\"elasticfilesystem:ClientWrite\",\"elasticfilesystem:ClientRootAccess\"],\"Resource\":\"arn:aws:elasticfilesystem:${{ env.AWS_REGION }}:${AWS_ACCOUNT_ID}:file-system/${EFS_ID}\"}]}"
+
+          # Dashboard AWS permissions (for managing coding lab instances)
+          # The dashboard uses ECS task role instead of stored credentials
+          cat > /tmp/dashboard-policy.json << 'POLICY'
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Sid": "ECSFullAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "ecs:*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "EC2ReadAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "ec2:DescribeVpcs",
+                  "ec2:DescribeSubnets",
+                  "ec2:DescribeSecurityGroups",
+                  "ec2:DescribeNetworkInterfaces",
+                  "ec2:CreateSecurityGroup",
+                  "ec2:AuthorizeSecurityGroupIngress",
+                  "ec2:AuthorizeSecurityGroupEgress"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "ECRFullAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "ecr:*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "IAMRoleManagement",
+                "Effect": "Allow",
+                "Action": [
+                  "iam:GetRole",
+                  "iam:CreateRole",
+                  "iam:AttachRolePolicy",
+                  "iam:PutRolePolicy",
+                  "iam:PassRole",
+                  "iam:ListRoles"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "CloudWatchLogsAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "logs:CreateLogGroup",
+                  "logs:CreateLogStream",
+                  "logs:PutLogEvents",
+                  "logs:DescribeLogGroups",
+                  "logs:DescribeLogStreams",
+                  "logs:GetLogEvents"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "CloudFrontAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "cloudfront:*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "CodeBuildAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "codebuild:*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "STSAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "sts:GetCallerIdentity"
+                ],
+                "Resource": "*"
+              }
+            ]
+          }
+          POLICY
+          aws iam put-role-policy --role-name ecsTaskRole --policy-name dashboard-aws-access --policy-document file:///tmp/dashboard-policy.json
 
       - name: Setup environment-specific ALB and target group
         id: env-setup

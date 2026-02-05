@@ -997,7 +997,7 @@ export default function SetupGuide() {
                 <div>
                   <h4 className="font-medium">AWS Account</h4>
                   <p className="text-sm text-gray-400">
-                    With access keys configured in Settings tab
+                    Dashboard uses the ECS task role automatically - no credentials needed
                   </p>
                 </div>
               </div>

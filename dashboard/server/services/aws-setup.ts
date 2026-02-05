@@ -18,7 +18,6 @@ import {
   PutRolePolicyCommand,
   AttachRolePolicyCommand,
   GetRoleCommand,
-  DeleteRolePolicyCommand,
 } from '@aws-sdk/client-iam';
 import {
   CodeBuildClient,
@@ -29,24 +28,25 @@ import {
   ECRClient,
   CreateRepositoryCommand,
   DescribeRepositoriesCommand,
+  DescribeImagesCommand,
+  GetAuthorizationTokenCommand,
 } from '@aws-sdk/client-ecr';
 import {
   STSClient,
   GetCallerIdentityCommand,
 } from '@aws-sdk/client-sts';
-import {
-  ECRClient as ECRClientFull,
-  GetAuthorizationTokenCommand,
-} from '@aws-sdk/client-ecr';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getCredentials, setConfig, getConfig } from '../db/database.js';
+import { setConfig, getConfig } from '../db/database.js';
 
 const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Use default credentials from ECS task role
+const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-southeast-1';
 
 export interface SetupStatus {
   step: string;
@@ -69,26 +69,13 @@ export interface SetupResult {
 }
 
 function getClients() {
-  const creds = getCredentials();
-  if (!creds) {
-    throw new Error('AWS credentials not configured');
-  }
-
-  const config = {
-    region: creds.region,
-    credentials: {
-      accessKeyId: creds.access_key_id,
-      secretAccessKey: creds.secret_access_key,
-    },
-  };
-
   return {
-    ecs: new ECSClient(config),
-    ec2: new EC2Client(config),
-    iam: new IAMClient(config),
-    ecr: new ECRClient(config),
-    sts: new STSClient(config),
-    codebuild: new CodeBuildClient(config),
+    ecs: new ECSClient({ region: AWS_REGION }),
+    ec2: new EC2Client({ region: AWS_REGION }),
+    iam: new IAMClient({ region: AWS_REGION }),
+    ecr: new ECRClient({ region: AWS_REGION }),
+    sts: new STSClient({ region: AWS_REGION }),
+    codebuild: new CodeBuildClient({ region: AWS_REGION }),
   };
 }
 
@@ -113,7 +100,6 @@ const BEDROCK_POLICY = JSON.stringify({
   }],
 });
 
-// CloudWatch Logs policy for execution role (required to create log groups)
 const CLOUDWATCH_LOGS_POLICY = JSON.stringify({
   Version: '2012-10-17',
   Statement: [{
@@ -128,7 +114,6 @@ const CLOUDWATCH_LOGS_POLICY = JSON.stringify({
   }],
 });
 
-// CodeBuild trust policy
 const CODEBUILD_TRUST_POLICY = JSON.stringify({
   Version: '2012-10-17',
   Statement: [{
@@ -138,16 +123,13 @@ const CODEBUILD_TRUST_POLICY = JSON.stringify({
   }],
 });
 
-// CodeBuild permissions policy (ECR, CloudWatch Logs, S3)
 function getCodeBuildPolicy(accountId: string, region: string): string {
   return JSON.stringify({
     Version: '2012-10-17',
     Statement: [
       {
         Effect: 'Allow',
-        Action: [
-          'ecr:GetAuthorizationToken',
-        ],
+        Action: ['ecr:GetAuthorizationToken'],
         Resource: '*',
       },
       {
@@ -187,7 +169,6 @@ export async function runFullSetup(
 
   try {
     const clients = getClients();
-    const creds = getCredentials()!;
 
     // Get AWS Account ID
     report({ step: 'get_account_id', status: 'in_progress', message: 'Getting AWS account ID...' });
@@ -215,7 +196,6 @@ export async function runFullSetup(
     if (subnets.length === 0) {
       throw new Error('No subnets found in the default VPC.');
     }
-    // Pick up to 2 subnets from different AZs
     const subnetIds = subnets
       .slice(0, 2)
       .map((s) => s.SubnetId!)
@@ -226,7 +206,6 @@ export async function runFullSetup(
     report({ step: 'create_security_group', status: 'in_progress', message: 'Creating security group...' });
     let securityGroupId: string;
     try {
-      // Check if it already exists
       const existingSg = await clients.ec2.send(new DescribeSecurityGroupsCommand({
         Filters: [
           { Name: 'group-name', Values: ['vibe-ecs-sg'] },
@@ -240,15 +219,12 @@ export async function runFullSetup(
         throw new Error('Not found');
       }
     } catch {
-      // Create new security group
       const sgResponse = await clients.ec2.send(new CreateSecurityGroupCommand({
         GroupName: 'vibe-ecs-sg',
         Description: 'Security group for Vibe Hackathon ECS tasks',
         VpcId: vpcId,
       }));
       securityGroupId = sgResponse.GroupId!;
-
-      // Add ingress rules for ports 8080 and 3000
       await clients.ec2.send(new AuthorizeSecurityGroupIngressCommand({
         GroupId: securityGroupId,
         IpPermissions: [
@@ -265,7 +241,6 @@ export async function runFullSetup(
     try {
       const existingRole = await clients.iam.send(new GetRoleCommand({ RoleName: 'ecsTaskExecutionRole' }));
       executionRoleArn = existingRole.Role!.Arn!;
-      // Ensure CloudWatch Logs policy is attached (might be missing from earlier setup)
       try {
         await clients.iam.send(new PutRolePolicyCommand({
           RoleName: 'ecsTaskExecutionRole',
@@ -273,30 +248,28 @@ export async function runFullSetup(
           PolicyDocument: CLOUDWATCH_LOGS_POLICY,
         }));
       } catch {
-        // Policy might already exist, that's fine
+        // Policy might already exist
       }
-      report({ step: 'create_execution_role', status: 'skipped', message: 'Execution role already exists (updated CloudWatch permissions)', resourceId: executionRoleArn });
+      report({ step: 'create_execution_role', status: 'skipped', message: 'Execution role already exists', resourceId: executionRoleArn });
     } catch {
       const roleResponse = await clients.iam.send(new CreateRoleCommand({
         RoleName: 'ecsTaskExecutionRole',
         AssumeRolePolicyDocument: ECS_TRUST_POLICY,
       }));
       executionRoleArn = roleResponse.Role!.Arn!;
-      // Attach standard ECS execution policy
       await clients.iam.send(new AttachRolePolicyCommand({
         RoleName: 'ecsTaskExecutionRole',
         PolicyArn: 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy',
       }));
-      // Add CloudWatch Logs permissions (required for log group creation)
       await clients.iam.send(new PutRolePolicyCommand({
         RoleName: 'ecsTaskExecutionRole',
         PolicyName: 'CloudWatchLogsAccess',
         PolicyDocument: CLOUDWATCH_LOGS_POLICY,
       }));
-      report({ step: 'create_execution_role', status: 'completed', message: 'Created execution role with CloudWatch permissions', resourceId: executionRoleArn });
+      report({ step: 'create_execution_role', status: 'completed', message: 'Created execution role', resourceId: executionRoleArn });
     }
 
-    // Step 5: Create task role with Bedrock access
+    // Step 5: Create task role
     report({ step: 'create_task_role', status: 'in_progress', message: 'Creating ECS task role with Bedrock access...' });
     let taskRoleArn: string;
     try {
@@ -314,7 +287,7 @@ export async function runFullSetup(
         PolicyName: 'BedrockAccess',
         PolicyDocument: BEDROCK_POLICY,
       }));
-      report({ step: 'create_task_role', status: 'completed', message: 'Created task role with Bedrock access', resourceId: taskRoleArn });
+      report({ step: 'create_task_role', status: 'completed', message: 'Created task role', resourceId: taskRoleArn });
     }
 
     // Step 6: Create ECR repository
@@ -375,13 +348,13 @@ export async function runFullSetup(
           { containerPort: 3000, protocol: 'tcp' },
         ],
         environment: [
-          { name: 'AWS_REGION', value: creds.region },
+          { name: 'AWS_REGION', value: AWS_REGION },
         ],
         logConfiguration: {
           logDriver: 'awslogs',
           options: {
             'awslogs-group': '/ecs/vibe-coding-lab',
-            'awslogs-region': creds.region,
+            'awslogs-region': AWS_REGION,
             'awslogs-stream-prefix': 'vibe',
             'awslogs-create-group': 'true',
           },
@@ -390,22 +363,21 @@ export async function runFullSetup(
     }));
     report({ step: 'register_task_definition', status: 'completed', message: 'Registered task definition', resourceId: taskDefinitionFamily });
 
-    // Step 9: Create CodeBuild service role
+    // Step 9: Create CodeBuild role
     report({ step: 'create_codebuild_role', status: 'in_progress', message: 'Creating CodeBuild service role...' });
     let codebuildRoleArn: string;
     const codebuildRoleName = 'codebuild-vibe-service-role';
     try {
       const existingRole = await clients.iam.send(new GetRoleCommand({ RoleName: codebuildRoleName }));
       codebuildRoleArn = existingRole.Role!.Arn!;
-      // Update the policy in case it changed
       try {
         await clients.iam.send(new PutRolePolicyCommand({
           RoleName: codebuildRoleName,
           PolicyName: 'CodeBuildPermissions',
-          PolicyDocument: getCodeBuildPolicy(accountId, creds.region),
+          PolicyDocument: getCodeBuildPolicy(accountId, AWS_REGION),
         }));
       } catch {
-        // Policy update failed, but role exists
+        // Policy update failed
       }
       report({ step: 'create_codebuild_role', status: 'skipped', message: 'CodeBuild role already exists', resourceId: codebuildRoleArn });
     } catch {
@@ -418,10 +390,9 @@ export async function runFullSetup(
       await clients.iam.send(new PutRolePolicyCommand({
         RoleName: codebuildRoleName,
         PolicyName: 'CodeBuildPermissions',
-        PolicyDocument: getCodeBuildPolicy(accountId, creds.region),
+        PolicyDocument: getCodeBuildPolicy(accountId, AWS_REGION),
       }));
       report({ step: 'create_codebuild_role', status: 'completed', message: 'Created CodeBuild service role', resourceId: codebuildRoleArn });
-      // Wait a moment for IAM role to propagate
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
 
@@ -438,7 +409,6 @@ export async function runFullSetup(
         throw new Error('Not found');
       }
     } catch {
-      // Create buildspec that builds both Continue and Cline images
       const buildspec = `version: 0.2
 phases:
   pre_build:
@@ -469,7 +439,7 @@ phases:
 
       await clients.codebuild.send(new CreateProjectCommand({
         name: codebuildProjectName,
-        description: 'Builds Vibe Coding Lab Docker images (Continue and Cline)',
+        description: 'Builds Vibe Coding Lab Docker images',
         source: {
           type: 'GITHUB',
           location: 'https://github.com/marcuslowhuiyu/VibeHackathonPlatform.git',
@@ -481,11 +451,11 @@ phases:
         environment: {
           type: 'LINUX_CONTAINER',
           computeType: 'BUILD_GENERAL1_MEDIUM',
-          image: 'aws/codebuild/standard:7.0', // Ubuntu - works in all regions
+          image: 'aws/codebuild/standard:7.0',
           privilegedMode: true,
           environmentVariables: [
             { name: 'AWS_ACCOUNT_ID', value: accountId },
-            { name: 'AWS_DEFAULT_REGION', value: creds.region },
+            { name: 'AWS_DEFAULT_REGION', value: AWS_REGION },
           ],
         },
         serviceRole: codebuildRoleArn,
@@ -493,7 +463,7 @@ phases:
       report({ step: 'create_codebuild_project', status: 'completed', message: 'Created CodeBuild project', resourceId: codebuildProjectName });
     }
 
-    // Save config to database
+    // Save config
     const config = {
       cluster_name: clusterName,
       task_definition: taskDefinitionFamily,
@@ -510,19 +480,19 @@ phases:
 
     report({ step: 'save_config', status: 'completed', message: 'Saved configuration to dashboard' });
 
-    return {
-      success: true,
-      steps,
-      config,
-    };
+    return { success: true, steps, config };
   } catch (err: any) {
-    return {
-      success: false,
-      steps,
-      error: err.message,
-    };
+    return { success: false, steps, error: err.message };
   }
 }
+
+export const AI_EXTENSIONS = ['continue', 'cline'] as const;
+export type AIExtension = typeof AI_EXTENSIONS[number];
+
+export const EXTENSION_DIRECTORIES: Record<AIExtension, string> = {
+  continue: 'cline-setup',
+  cline: 'cline-ai',
+};
 
 export async function checkSetupStatus(): Promise<{
   configured: boolean;
@@ -538,22 +508,17 @@ export async function checkSetupStatus(): Promise<{
 
   try {
     const clients = getClients();
-    const creds = getCredentials();
 
-    if (!creds) {
-      return { configured: false, missing: ['AWS credentials'], ecrImageExists: false, imageUri: null, availableImages: [] };
-    }
-
-    // Get account ID for image URI
+    // Get account ID
     let accountId: string | null = null;
     try {
       const identity = await clients.sts.send(new GetCallerIdentityCommand({}));
       accountId = identity.Account || null;
       if (accountId) {
-        imageUri = `${accountId}.dkr.ecr.${creds.region}.amazonaws.com/vibe-coding-lab:latest`;
+        imageUri = `${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:latest`;
       }
     } catch {
-      // Will be caught later
+      return { configured: false, missing: ['AWS access (check task role)'], ecrImageExists: false, imageUri: null, availableImages: [] };
     }
 
     // Check cluster
@@ -568,25 +533,15 @@ export async function checkSetupStatus(): Promise<{
       missing.push('ECS cluster');
     }
 
-    // Check ECR repo and available images
+    // Check ECR repo and images
     try {
       const repo = await clients.ecr.send(new DescribeRepositoriesCommand({
         repositoryNames: ['vibe-coding-lab'],
       }));
       if (repo.repositories && repo.repositories.length > 0) {
-        const { ECRClient, DescribeImagesCommand, ListImagesCommand } = await import('@aws-sdk/client-ecr');
-        const ecr = new ECRClient({
-          region: creds.region,
-          credentials: {
-            accessKeyId: creds.access_key_id,
-            secretAccessKey: creds.secret_access_key,
-          },
-        });
-
-        // Check for each extension image
         for (const ext of AI_EXTENSIONS) {
           try {
-            const images = await ecr.send(new DescribeImagesCommand({
+            const images = await clients.ecr.send(new DescribeImagesCommand({
               repositoryName: 'vibe-coding-lab',
               imageIds: [{ imageTag: ext }],
             }));
@@ -594,18 +549,16 @@ export async function checkSetupStatus(): Promise<{
               availableImages.push(ext);
             }
           } catch {
-            // Image tag doesn't exist
+            // Image doesn't exist
           }
         }
 
-        // Also check for 'latest' tag for backwards compatibility
         try {
-          const images = await ecr.send(new DescribeImagesCommand({
+          const images = await clients.ecr.send(new DescribeImagesCommand({
             repositoryName: 'vibe-coding-lab',
             imageIds: [{ imageTag: 'latest' }],
           }));
           ecrImageExists = (images.imageDetails?.length || 0) > 0;
-          // If only 'latest' exists and no extension-specific tags, assume it's 'continue'
           if (ecrImageExists && availableImages.length === 0) {
             availableImages.push('continue');
           }
@@ -613,7 +566,6 @@ export async function checkSetupStatus(): Promise<{
           ecrImageExists = false;
         }
 
-        // If we have any extension images, mark as existing
         if (availableImages.length > 0) {
           ecrImageExists = true;
         }
@@ -661,48 +613,30 @@ export async function checkSetupStatus(): Promise<{
       missing.push('CodeBuild project');
     }
 
-    return {
-      configured: missing.length === 0,
-      missing,
-      ecrImageExists,
-      imageUri,
-      availableImages,
-    };
+    return { configured: missing.length === 0, missing, ecrImageExists, imageUri, availableImages };
   } catch (err: any) {
-    return {
-      configured: false,
-      missing: ['Unable to check: ' + err.message],
-      ecrImageExists: false,
-      imageUri: null,
-      availableImages: [],
-    };
+    return { configured: false, missing: ['Unable to check: ' + err.message], ecrImageExists: false, imageUri: null, availableImages: [] };
   }
 }
 
 export async function getDockerPushCommands(): Promise<string> {
-  const creds = getCredentials();
-  if (!creds) {
-    return '# Configure AWS credentials first';
-  }
-
   try {
     const clients = getClients();
     const identity = await clients.sts.send(new GetCallerIdentityCommand({}));
     const accountId = identity.Account!;
-    const region = creds.region;
 
     return `# Run these commands in your terminal (from the project root):
 
 # 1. Authenticate Docker with ECR
-aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${accountId}.dkr.ecr.${region}.amazonaws.com
+aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com
 
 # 2. Build the image
 cd cline-setup
 docker build -t vibe-coding-lab:latest .
 
 # 3. Tag and push to ECR
-docker tag vibe-coding-lab:latest ${accountId}.dkr.ecr.${region}.amazonaws.com/vibe-coding-lab:latest
-docker push ${accountId}.dkr.ecr.${region}.amazonaws.com/vibe-coding-lab:latest
+docker tag vibe-coding-lab:latest ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:latest
+docker push ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:latest
 
 # 4. Return to dashboard directory
 cd ..`;
@@ -721,7 +655,6 @@ export interface DockerBuildResult {
 export async function checkDockerAvailable(): Promise<{ available: boolean; message: string }> {
   try {
     await execAsync('docker --version');
-    // Check if Docker daemon is running
     await execAsync('docker info');
     return { available: true, message: 'Docker is available and running' };
   } catch (err: any) {
@@ -735,23 +668,9 @@ export async function checkDockerAvailable(): Promise<{ available: boolean; mess
   }
 }
 
-// ==========================================
-// AI EXTENSION CONFIGURATION
-// Add new AI extensions here to scale support
-// ==========================================
-// Each extension has its own directory with Dockerfile, entrypoint.sh, and config
-export const AI_EXTENSIONS = ['continue', 'cline'] as const;
-export type AIExtension = typeof AI_EXTENSIONS[number];
-
-// Map extensions to their Dockerfile directories
-export const EXTENSION_DIRECTORIES: Record<AIExtension, string> = {
-  continue: 'cline-setup',  // Continue uses the cline-setup directory (historical naming)
-  cline: 'cline-ai',        // Cline uses the cline-ai directory
-};
-
 export async function buildAndPushImage(
   onProgress?: (result: DockerBuildResult) => void,
-  extensions?: AIExtension[] // If not provided, builds selected extension. Pass ['continue'] for all
+  extensions?: AIExtension[]
 ): Promise<{ success: boolean; steps: DockerBuildResult[]; error?: string }> {
   const steps: DockerBuildResult[] = [];
   const report = (result: DockerBuildResult) => {
@@ -760,12 +679,7 @@ export async function buildAndPushImage(
   };
 
   try {
-    const creds = getCredentials();
-    if (!creds) {
-      throw new Error('AWS credentials not configured');
-    }
-
-    // Check Docker availability
+    // Check Docker
     report({ success: true, step: 'check_docker', message: 'Checking Docker availability...' });
     const dockerCheck = await checkDockerAvailable();
     if (!dockerCheck.available) {
@@ -773,25 +687,17 @@ export async function buildAndPushImage(
     }
     report({ success: true, step: 'check_docker', message: dockerCheck.message });
 
-    // Get AWS account ID
+    // Get AWS account
     report({ success: true, step: 'get_account', message: 'Getting AWS account info...' });
     const clients = getClients();
     const identity = await clients.sts.send(new GetCallerIdentityCommand({}));
     const accountId = identity.Account!;
-    const region = creds.region;
-    const ecrRepo = `${accountId}.dkr.ecr.${region}.amazonaws.com/vibe-coding-lab`;
-    report({ success: true, step: 'get_account', message: `Account: ${accountId}, Region: ${region}` });
+    const ecrRepo = `${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab`;
+    report({ success: true, step: 'get_account', message: `Account: ${accountId}, Region: ${AWS_REGION}` });
 
-    // Get ECR auth token
+    // Get ECR auth
     report({ success: true, step: 'ecr_auth', message: 'Getting ECR authentication token...' });
-    const ecrClient = new ECRClientFull({
-      region: creds.region,
-      credentials: {
-        accessKeyId: creds.access_key_id,
-        secretAccessKey: creds.secret_access_key,
-      },
-    });
-    const authResponse = await ecrClient.send(new GetAuthorizationTokenCommand({}));
+    const authResponse = await clients.ecr.send(new GetAuthorizationTokenCommand({}));
     const authData = authResponse.authorizationData?.[0];
     if (!authData?.authorizationToken) {
       throw new Error('Failed to get ECR authorization token');
@@ -800,43 +706,35 @@ export async function buildAndPushImage(
     const [username, password] = decodedToken.split(':');
     report({ success: true, step: 'ecr_auth', message: 'Got ECR auth token' });
 
-    // Docker login to ECR
+    // Docker login
     report({ success: true, step: 'docker_login', message: 'Logging into ECR...' });
-    const loginCmd = `docker login --username ${username} --password ${password} ${accountId}.dkr.ecr.${region}.amazonaws.com`;
+    const loginCmd = `docker login --username ${username} --password ${password} ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com`;
     await execAsync(loginCmd);
     report({ success: true, step: 'docker_login', message: 'Logged into ECR' });
 
-    // Determine which extensions to build
+    // Build extensions
     const extensionsToBuild = extensions || [getConfig('ai_extension') as AIExtension || 'continue'];
-
     report({ success: true, step: 'get_extension', message: `Building extensions: ${extensionsToBuild.join(', ')}` });
 
-    // Build, tag, and push each extension
     for (const ext of extensionsToBuild) {
-      const extTag = ext; // Tag will be :continue or :cline
       const extDir = EXTENSION_DIRECTORIES[ext];
       const dockerfilePath = path.resolve(__dirname, `../../../${extDir}`);
 
-      // Build Docker image
-      report({ success: true, step: `docker_build_${ext}`, message: `Building ${ext} image from ${extDir}/ (this may take several minutes)...` });
-      const buildCmd = `docker build --no-cache -t vibe-coding-lab:${extTag} "${dockerfilePath}"`;
-      await execAsync(buildCmd, { maxBuffer: 50 * 1024 * 1024, timeout: 600000 }); // 50MB buffer, 10min timeout
-      report({ success: true, step: `docker_build_${ext}`, message: `Docker image built successfully: ${ext}` });
+      report({ success: true, step: `docker_build_${ext}`, message: `Building ${ext} image...` });
+      const buildCmd = `docker build --no-cache -t vibe-coding-lab:${ext} "${dockerfilePath}"`;
+      await execAsync(buildCmd, { maxBuffer: 50 * 1024 * 1024, timeout: 600000 });
+      report({ success: true, step: `docker_build_${ext}`, message: `Built ${ext} image` });
 
-      // Tag image for ECR
-      report({ success: true, step: `docker_tag_${ext}`, message: `Tagging ${ext} image for ECR...` });
-      const tagCmd = `docker tag vibe-coding-lab:${extTag} ${ecrRepo}:${extTag}`;
-      await execAsync(tagCmd);
-      report({ success: true, step: `docker_tag_${ext}`, message: `Tagged as ${ecrRepo}:${extTag}` });
+      report({ success: true, step: `docker_tag_${ext}`, message: `Tagging ${ext} image...` });
+      await execAsync(`docker tag vibe-coding-lab:${ext} ${ecrRepo}:${ext}`);
+      report({ success: true, step: `docker_tag_${ext}`, message: `Tagged ${ecrRepo}:${ext}` });
 
-      // Push image
-      report({ success: true, step: `docker_push_${ext}`, message: `Pushing ${ext} image to ECR...` });
-      const pushCmd = `docker push ${ecrRepo}:${extTag}`;
-      await execAsync(pushCmd, { maxBuffer: 50 * 1024 * 1024 });
-      report({ success: true, step: `docker_push_${ext}`, message: `Image ${ext} pushed to ECR successfully` });
+      report({ success: true, step: `docker_push_${ext}`, message: `Pushing ${ext} image...` });
+      await execAsync(`docker push ${ecrRepo}:${ext}`, { maxBuffer: 50 * 1024 * 1024 });
+      report({ success: true, step: `docker_push_${ext}`, message: `Pushed ${ext} image` });
     }
 
-    // Also tag the first extension as :latest for backwards compatibility
+    // Tag latest
     if (extensionsToBuild.length > 0) {
       const firstExt = extensionsToBuild[0];
       report({ success: true, step: 'docker_tag_latest', message: 'Tagging latest...' });
@@ -847,13 +745,7 @@ export async function buildAndPushImage(
 
     return { success: true, steps };
   } catch (err: any) {
-    const errorResult: DockerBuildResult = {
-      success: false,
-      step: 'error',
-      message: 'Build failed',
-      error: err.message,
-    };
-    steps.push(errorResult);
+    steps.push({ success: false, step: 'error', message: 'Build failed', error: err.message });
     return { success: false, steps, error: err.message };
   }
 }

@@ -3,7 +3,6 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import instancesRouter from './routes/instances.js';
-import credentialsRouter from './routes/credentials.js';
 import configRouter from './routes/config.js';
 import setupRouter from './routes/setup.js';
 import participantsRouter from './routes/participants.js';
@@ -30,7 +29,6 @@ app.use('/api/auth', authRouter);
 
 // Protected Admin API Routes
 app.use('/api/instances', requireAdmin, instancesRouter);
-app.use('/api/credentials', requireAdmin, credentialsRouter);
 app.use('/api/config', requireAdmin, configRouter);
 app.use('/api/setup', requireAdmin, setupRouter);
 app.use('/api/participants', requireAdmin, participantsRouter);
@@ -46,10 +44,10 @@ app.get('/api/health', (req, res) => {
 // Version/build info - helps verify which code is deployed
 app.get('/api/version', (req, res) => {
   res.json({
-    version: '2.1.0',
+    version: '2.2.0',
     build: process.env.BUILD_SHA || 'local',
     buildDate: '2026-02-05',
-    features: ['continue', 'cline', 'codebuild-setup'],
+    features: ['continue', 'cline', 'codebuild-setup', 'task-role-auth'],
   });
 });
 

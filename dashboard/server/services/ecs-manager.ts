@@ -27,9 +27,11 @@ import {
   CloudFrontClient,
   ListDistributionsCommand,
 } from '@aws-sdk/client-cloudfront';
-import { getCredentials, getConfig, getAllConfig } from '../db/database.js';
+import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
+import { getConfig, getAllConfig } from '../db/database.js';
 
-// Validates AWS credentials and checks permissions for ECS, ECR, EC2, IAM, CloudWatch Logs
+// Use default credentials from ECS task role - no need to store credentials
+const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-southeast-1';
 
 export interface TaskInfo {
   taskArn: string;
@@ -38,122 +40,44 @@ export interface TaskInfo {
   publicIp?: string;
 }
 
+// All clients use default credentials (from ECS task role)
 function getECSClient(): ECSClient {
-  const creds = getCredentials();
-  if (!creds) {
-    throw new Error('AWS credentials not configured');
-  }
-
-  return new ECSClient({
-    region: creds.region,
-    credentials: {
-      accessKeyId: creds.access_key_id,
-      secretAccessKey: creds.secret_access_key,
-    },
-  });
+  return new ECSClient({ region: AWS_REGION });
 }
 
 function getEC2Client(): EC2Client {
-  const creds = getCredentials();
-  if (!creds) {
-    throw new Error('AWS credentials not configured');
-  }
-
-  return new EC2Client({
-    region: creds.region,
-    credentials: {
-      accessKeyId: creds.access_key_id,
-      secretAccessKey: creds.secret_access_key,
-    },
-  });
+  return new EC2Client({ region: AWS_REGION });
 }
 
 function getECRClient(): ECRClient {
-  const creds = getCredentials();
-  if (!creds) {
-    throw new Error('AWS credentials not configured');
-  }
-
-  return new ECRClient({
-    region: creds.region,
-    credentials: {
-      accessKeyId: creds.access_key_id,
-      secretAccessKey: creds.secret_access_key,
-    },
-  });
+  return new ECRClient({ region: AWS_REGION });
 }
 
 function getIAMClient(): IAMClient {
-  const creds = getCredentials();
-  if (!creds) {
-    throw new Error('AWS credentials not configured');
-  }
-
-  return new IAMClient({
-    region: creds.region,
-    credentials: {
-      accessKeyId: creds.access_key_id,
-      secretAccessKey: creds.secret_access_key,
-    },
-  });
+  return new IAMClient({ region: AWS_REGION });
 }
 
 function getCloudWatchLogsClient(): CloudWatchLogsClient {
-  const creds = getCredentials();
-  if (!creds) {
-    throw new Error('AWS credentials not configured');
-  }
-
-  return new CloudWatchLogsClient({
-    region: creds.region,
-    credentials: {
-      accessKeyId: creds.access_key_id,
-      secretAccessKey: creds.secret_access_key,
-    },
-  });
+  return new CloudWatchLogsClient({ region: AWS_REGION });
 }
 
 function getCloudFrontClient(): CloudFrontClient {
-  const creds = getCredentials();
-  if (!creds) {
-    throw new Error('AWS credentials not configured');
-  }
-
   // CloudFront is a global service
-  return new CloudFrontClient({
-    region: 'us-east-1',
-    credentials: {
-      accessKeyId: creds.access_key_id,
-      secretAccessKey: creds.secret_access_key,
-    },
-  });
+  return new CloudFrontClient({ region: 'us-east-1' });
 }
 
-import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
-
 function getSTSClient(): STSClient {
-  const creds = getCredentials();
-  if (!creds) {
-    throw new Error('AWS credentials not configured');
-  }
+  return new STSClient({ region: AWS_REGION });
+}
 
-  return new STSClient({
-    region: creds.region,
-    credentials: {
-      accessKeyId: creds.access_key_id,
-      secretAccessKey: creds.secret_access_key,
-    },
-  });
+// Export region for other modules
+export function getAwsRegion(): string {
+  return AWS_REGION;
 }
 
 export async function runTask(instanceId: string, extension: string = 'continue'): Promise<TaskInfo> {
   const client = getECSClient();
-  const creds = getCredentials();
   const config = getAllConfig();
-
-  if (!creds) {
-    throw new Error('AWS credentials not configured');
-  }
 
   const clusterName = config.cluster_name || 'vibe-cluster';
   const taskDefinition = config.task_definition || 'vibe-coding-lab';
@@ -161,20 +85,12 @@ export async function runTask(instanceId: string, extension: string = 'continue'
   const securityGroupId = config.security_group_id;
 
   if (subnetIds.length === 0) {
-    throw new Error('Subnet IDs not configured. Please set up AWS config first.');
+    throw new Error('Subnet IDs not configured. Please run automated setup first.');
   }
 
   if (!securityGroupId) {
-    throw new Error('Security group ID not configured. Please set up AWS config first.');
+    throw new Error('Security group ID not configured. Please run automated setup first.');
   }
-
-  // Get AWS account ID to construct ECR image URI
-  const stsClient = getSTSClient();
-  const identity = await stsClient.send(new GetCallerIdentityCommand({}));
-  const accountId = identity.Account;
-
-  // Construct image URI with extension tag
-  const imageUri = `${accountId}.dkr.ecr.${creds.region}.amazonaws.com/vibe-coding-lab:${extension}`;
 
   const response = await client.send(
     new RunTaskCommand({
@@ -185,22 +101,16 @@ export async function runTask(instanceId: string, extension: string = 'continue'
         awsvpcConfiguration: {
           subnets: subnetIds,
           securityGroups: [securityGroupId],
-          assignPublicIp: 'ENABLED', // Enable for direct access (simpler setup)
+          assignPublicIp: 'ENABLED',
         },
       },
       overrides: {
         containerOverrides: [
           {
             name: 'vibe-container',
-            // Override the image to use the extension-specific tag
-            image: imageUri,
             environment: [
               { name: 'INSTANCE_ID', value: instanceId },
-              // Pass AWS credentials for AI extension/Bedrock access
-              { name: 'AWS_ACCESS_KEY_ID', value: creds.access_key_id },
-              { name: 'AWS_SECRET_ACCESS_KEY', value: creds.secret_access_key },
-              { name: 'AWS_REGION', value: creds.region },
-              // Pass selected AI extension
+              { name: 'AWS_REGION', value: AWS_REGION },
               { name: 'AI_EXTENSION', value: extension },
             ],
           },
@@ -252,7 +162,6 @@ export async function getTaskStatus(taskArn: string): Promise<TaskInfo | null> {
       return null;
     }
 
-    // Get the ENI attachment to find the IP
     const eniAttachment = task.attachments?.find(a => a.type === 'ElasticNetworkInterface');
     const eniId = eniAttachment?.details?.find(d => d.name === 'networkInterfaceId')?.value;
 
@@ -311,14 +220,12 @@ export interface RunningTaskInfo {
   taskDefinition?: string;
 }
 
-// Get detailed info for all running tasks in the cluster
 export async function getAllRunningTasks(): Promise<RunningTaskInfo[]> {
   const client = getECSClient();
   const ec2Client = getEC2Client();
   const config = getAllConfig();
   const clusterName = config.cluster_name || 'vibe-cluster';
 
-  // First list all task ARNs
   const listResponse = await client.send(
     new ListTasksCommand({
       cluster: clusterName,
@@ -330,7 +237,6 @@ export async function getAllRunningTasks(): Promise<RunningTaskInfo[]> {
     return [];
   }
 
-  // Get details for all tasks
   const describeResponse = await client.send(
     new DescribeTasksCommand({
       cluster: clusterName,
@@ -341,10 +247,7 @@ export async function getAllRunningTasks(): Promise<RunningTaskInfo[]> {
   const tasks: RunningTaskInfo[] = [];
 
   for (const task of describeResponse.tasks || []) {
-    // Extract task ID from ARN
     const taskId = task.taskArn?.split('/').pop() || '';
-
-    // Get ENI for IP addresses
     const eniAttachment = task.attachments?.find(a => a.type === 'ElasticNetworkInterface');
     const eniId = eniAttachment?.details?.find(d => d.name === 'networkInterfaceId')?.value;
 
@@ -390,11 +293,27 @@ export interface PermissionCheck {
 export interface ValidateCredentialsResult {
   valid: boolean;
   message: string;
+  accountId?: string;
+  region?: string;
   permissions?: PermissionCheck[];
 }
 
 export async function validateCredentials(): Promise<ValidateCredentialsResult> {
   const permissions: PermissionCheck[] = [];
+  let accountId: string | undefined;
+
+  // First check if we can get caller identity (basic credential check)
+  try {
+    const stsClient = getSTSClient();
+    const identity = await stsClient.send(new GetCallerIdentityCommand({}));
+    accountId = identity.Account;
+  } catch (err: any) {
+    return {
+      valid: false,
+      message: 'Unable to access AWS - task role may not be configured correctly',
+      region: AWS_REGION,
+    };
+  }
 
   // Check ECS permissions
   try {
@@ -407,24 +326,17 @@ export async function validateCredentials(): Promise<ValidateCredentialsResult> 
       message: 'Can manage ECS clusters and tasks',
     });
   } catch (err: any) {
-    if (err.name === 'AccessDeniedException' || err.message?.includes('not authorized')) {
-      permissions.push({
-        service: 'ECS',
-        permission: 'ecs:ListClusters',
-        status: 'denied',
-        message: 'Missing ECS permissions - need AmazonECS_FullAccess policy',
-      });
-    } else {
-      permissions.push({
-        service: 'ECS',
-        permission: 'ecs:ListClusters',
-        status: 'error',
-        message: err.message || 'Unknown error checking ECS',
-      });
-    }
+    permissions.push({
+      service: 'ECS',
+      permission: 'ecs:ListClusters',
+      status: err.name === 'AccessDeniedException' ? 'denied' : 'error',
+      message: err.name === 'AccessDeniedException'
+        ? 'Missing ECS permissions - add AmazonECS_FullAccess to task role'
+        : err.message,
+    });
   }
 
-  // Check EC2 permissions (VPC/networking)
+  // Check EC2 permissions
   try {
     const ec2Client = getEC2Client();
     await ec2Client.send(new DescribeVpcsCommand({ MaxResults: 5 }));
@@ -435,21 +347,14 @@ export async function validateCredentials(): Promise<ValidateCredentialsResult> 
       message: 'Can read VPC and networking info',
     });
   } catch (err: any) {
-    if (err.name === 'UnauthorizedOperation' || err.message?.includes('not authorized')) {
-      permissions.push({
-        service: 'EC2',
-        permission: 'ec2:DescribeVpcs',
-        status: 'denied',
-        message: 'Missing EC2 permissions - need AmazonEC2ReadOnlyAccess policy',
-      });
-    } else {
-      permissions.push({
-        service: 'EC2',
-        permission: 'ec2:DescribeVpcs',
-        status: 'error',
-        message: err.message || 'Unknown error checking EC2',
-      });
-    }
+    permissions.push({
+      service: 'EC2',
+      permission: 'ec2:DescribeVpcs',
+      status: err.name === 'UnauthorizedOperation' ? 'denied' : 'error',
+      message: err.name === 'UnauthorizedOperation'
+        ? 'Missing EC2 permissions - add AmazonEC2ReadOnlyAccess to task role'
+        : err.message,
+    });
   }
 
   // Check ECR permissions
@@ -463,24 +368,17 @@ export async function validateCredentials(): Promise<ValidateCredentialsResult> 
       message: 'Can manage container registry',
     });
   } catch (err: any) {
-    if (err.name === 'AccessDeniedException' || err.message?.includes('not authorized')) {
-      permissions.push({
-        service: 'ECR',
-        permission: 'ecr:DescribeRepositories',
-        status: 'denied',
-        message: 'Missing ECR permissions - need AmazonEC2ContainerRegistryFullAccess policy',
-      });
-    } else {
-      permissions.push({
-        service: 'ECR',
-        permission: 'ecr:DescribeRepositories',
-        status: 'error',
-        message: err.message || 'Unknown error checking ECR',
-      });
-    }
+    permissions.push({
+      service: 'ECR',
+      permission: 'ecr:DescribeRepositories',
+      status: err.name === 'AccessDeniedException' ? 'denied' : 'error',
+      message: err.name === 'AccessDeniedException'
+        ? 'Missing ECR permissions - add AmazonEC2ContainerRegistryFullAccess to task role'
+        : err.message,
+    });
   }
 
-  // Check IAM permissions (needed for role creation during setup)
+  // Check IAM permissions
   try {
     const iamClient = getIAMClient();
     await iamClient.send(new ListRolesCommand({ MaxItems: 1 }));
@@ -488,24 +386,17 @@ export async function validateCredentials(): Promise<ValidateCredentialsResult> 
       service: 'IAM',
       permission: 'iam:ListRoles',
       status: 'granted',
-      message: 'Can manage IAM roles for ECS tasks',
+      message: 'Can manage IAM roles',
     });
   } catch (err: any) {
-    if (err.name === 'AccessDeniedException' || err.message?.includes('not authorized')) {
-      permissions.push({
-        service: 'IAM',
-        permission: 'iam:ListRoles',
-        status: 'denied',
-        message: 'Missing IAM permissions - need IAMFullAccess policy (only for automated setup)',
-      });
-    } else {
-      permissions.push({
-        service: 'IAM',
-        permission: 'iam:ListRoles',
-        status: 'error',
-        message: err.message || 'Unknown error checking IAM',
-      });
-    }
+    permissions.push({
+      service: 'IAM',
+      permission: 'iam:ListRoles',
+      status: err.name === 'AccessDeniedException' ? 'denied' : 'error',
+      message: err.name === 'AccessDeniedException'
+        ? 'Missing IAM permissions (optional - only needed for automated setup)'
+        : err.message,
+    });
   }
 
   // Check CloudWatch Logs permissions
@@ -519,24 +410,17 @@ export async function validateCredentials(): Promise<ValidateCredentialsResult> 
       message: 'Can view container logs',
     });
   } catch (err: any) {
-    if (err.name === 'AccessDeniedException' || err.message?.includes('not authorized')) {
-      permissions.push({
-        service: 'CloudWatch Logs',
-        permission: 'logs:DescribeLogGroups',
-        status: 'denied',
-        message: 'Missing CloudWatch Logs permissions - need CloudWatchLogsFullAccess policy',
-      });
-    } else {
-      permissions.push({
-        service: 'CloudWatch Logs',
-        permission: 'logs:DescribeLogGroups',
-        status: 'error',
-        message: err.message || 'Unknown error checking CloudWatch Logs',
-      });
-    }
+    permissions.push({
+      service: 'CloudWatch Logs',
+      permission: 'logs:DescribeLogGroups',
+      status: err.name === 'AccessDeniedException' ? 'denied' : 'error',
+      message: err.name === 'AccessDeniedException'
+        ? 'Missing CloudWatch Logs permissions - add CloudWatchLogsFullAccess to task role'
+        : err.message,
+    });
   }
 
-  // Check CloudFront permissions (needed for HTTPS access)
+  // Check CloudFront permissions
   try {
     const cfClient = getCloudFrontClient();
     await cfClient.send(new ListDistributionsCommand({ MaxItems: 1 }));
@@ -544,64 +428,44 @@ export async function validateCredentials(): Promise<ValidateCredentialsResult> 
       service: 'CloudFront',
       permission: 'cloudfront:ListDistributions',
       status: 'granted',
-      message: 'Can manage CloudFront distributions for HTTPS',
+      message: 'Can manage CloudFront for HTTPS',
     });
   } catch (err: any) {
-    if (err.name === 'AccessDeniedException' || err.message?.includes('not authorized')) {
-      permissions.push({
-        service: 'CloudFront',
-        permission: 'cloudfront:ListDistributions',
-        status: 'denied',
-        message: 'Missing CloudFront permissions - need CloudFrontFullAccess policy for HTTPS',
-      });
-    } else {
-      permissions.push({
-        service: 'CloudFront',
-        permission: 'cloudfront:ListDistributions',
-        status: 'error',
-        message: err.message || 'Unknown error checking CloudFront',
-      });
-    }
+    permissions.push({
+      service: 'CloudFront',
+      permission: 'cloudfront:ListDistributions',
+      status: err.name === 'AccessDeniedException' ? 'denied' : 'error',
+      message: err.name === 'AccessDeniedException'
+        ? 'Missing CloudFront permissions - add CloudFrontFullAccess to task role'
+        : err.message,
+    });
   }
 
-  // Determine overall validity
   const deniedCount = permissions.filter(p => p.status === 'denied').length;
-  const errorCount = permissions.filter(p => p.status === 'error').length;
   const grantedCount = permissions.filter(p => p.status === 'granted').length;
 
-  // Consider valid if at least ECS, EC2, and ECR are granted (IAM only needed for setup)
   const corePermissions = permissions.filter(p =>
     p.service === 'ECS' || p.service === 'EC2' || p.service === 'ECR'
   );
   const coreGranted = corePermissions.every(p => p.status === 'granted');
 
-  if (errorCount > 0 && grantedCount === 0) {
+  if (coreGranted) {
     return {
-      valid: false,
-      message: 'Invalid credentials or unable to connect to AWS',
+      valid: true,
+      message: deniedCount === 0
+        ? `All ${grantedCount} permissions granted`
+        : `Core permissions OK. ${deniedCount} optional permission(s) missing.`,
+      accountId,
+      region: AWS_REGION,
       permissions,
     };
   }
 
-  if (coreGranted) {
-    if (deniedCount === 0) {
-      return {
-        valid: true,
-        message: `All ${grantedCount} permission checks passed`,
-        permissions,
-      };
-    } else {
-      return {
-        valid: true,
-        message: `Core permissions OK. ${deniedCount} optional permission(s) missing.`,
-        permissions,
-      };
-    }
-  }
-
   return {
     valid: false,
-    message: `Missing ${deniedCount} required permission(s). See details below.`,
+    message: `Missing ${deniedCount} required permission(s). Add policies to the ecsTaskRole.`,
+    accountId,
+    region: AWS_REGION,
     permissions,
   };
 }

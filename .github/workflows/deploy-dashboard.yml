@@ -603,22 +603,17 @@ jobs:
             aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SERVICE_NAME --force
             echo "Waiting for service to be fully deleted..."
 
-            # Wait for service to finish draining and become inactive
-            for i in {1..30}; do
+            # Wait for service to become INACTIVE (not just drained)
+            for i in {1..60}; do
               STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
               RUNNING=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].runningCount' --output text 2>/dev/null || echo "0")
-              echo "Service status: $STATUS, running tasks: $RUNNING"
+              echo "Service status: $STATUS, running tasks: $RUNNING ($i/60)"
               if [ "$STATUS" == "INACTIVE" ] || [ "$STATUS" == "MISSING" ] || [ "$STATUS" == "None" ]; then
-                echo "Service is now inactive"
+                echo "Service is now inactive - ready to create new service"
                 break
               fi
-              if [ "$STATUS" == "DRAINING" ] && [ "$RUNNING" == "0" ]; then
-                echo "Service drained, waiting a bit more for cleanup..."
-                sleep 5
-                break
-              fi
-              echo "Waiting for service to drain... ($i/30)"
-              sleep 10
+              # Keep waiting even if DRAINING with 0 tasks - must wait for INACTIVE
+              sleep 5
             done
 
             echo "Creating new service with new target group..."
@@ -633,22 +628,17 @@ jobs:
               --deployment-configuration "minimumHealthyPercent=0,maximumPercent=200" \
               --health-check-grace-period-seconds 120
           elif [ "$SERVICE_STATUS" == "DRAINING" ]; then
-            echo "Service is draining, waiting for it to complete..."
-            for i in {1..30}; do
+            echo "Service is draining, waiting for it to become inactive..."
+            for i in {1..60}; do
               STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
               RUNNING=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].runningCount' --output text 2>/dev/null || echo "0")
-              echo "Service status: $STATUS, running tasks: $RUNNING"
+              echo "Service status: $STATUS, running tasks: $RUNNING ($i/60)"
               if [ "$STATUS" == "INACTIVE" ] || [ "$STATUS" == "MISSING" ] || [ "$STATUS" == "None" ]; then
-                echo "Service is now inactive"
+                echo "Service is now inactive - ready to create new service"
                 break
               fi
-              if [ "$STATUS" == "DRAINING" ] && [ "$RUNNING" == "0" ]; then
-                echo "Service drained, waiting a bit more for cleanup..."
-                sleep 5
-                break
-              fi
-              echo "Waiting for service to drain... ($i/30)"
-              sleep 10
+              # Keep waiting - must reach INACTIVE before creating new service
+              sleep 5
             done
 
             echo "Creating new service..."

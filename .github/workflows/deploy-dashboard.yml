@@ -375,14 +375,13 @@ jobs:
                 --priority 10
             fi
           else
-            # Feature/test branches use path-based routing: /test/<branch-slug>/*
-            # Check if path-based rule exists for this branch
+            # Feature/test branches use header-based routing: X-Branch: <branch-slug>
             RULE_EXISTS=$(aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
-              --query "Rules[?Conditions[?PathPatternConfig.Values[?contains(@, '/test/$BRANCH_SLUG')]]]" \
+              --query "Rules[?Conditions[?HttpHeaderConfig.HttpHeaderName=='X-Branch' && contains(HttpHeaderConfig.Values, '$BRANCH_SLUG')]].RuleArn" \
               --output text 2>/dev/null || echo "")
 
-            if [ -z "$RULE_EXISTS" ] || [ "$RULE_EXISTS" == "None" ] || [ "$RULE_EXISTS" == "[]" ]; then
-              echo "Creating path-based routing rule for test environment: /test/$BRANCH_SLUG/*"
+            if [ -z "$RULE_EXISTS" ] || [ "$RULE_EXISTS" == "None" ]; then
+              echo "Creating header-based routing rule for test environment: X-Branch: $BRANCH_SLUG"
 
               # Find an available priority (start from 100 for test environments)
               PRIORITY=100
@@ -401,7 +400,7 @@ jobs:
 
               aws elbv2 create-rule \
                 --listener-arn $LISTENER_ARN \
-                --conditions Field=path-pattern,PathPatternConfig="{Values=[/test/$BRANCH_SLUG,/test/$BRANCH_SLUG/*]}" \
+                --conditions Field=http-header,HttpHeaderConfig="{HttpHeaderName=X-Branch,Values=[$BRANCH_SLUG]}" \
                 --actions Type=forward,TargetGroupArn=$TG_ARN \
                 --priority $PRIORITY
 
@@ -436,13 +435,6 @@ jobs:
             AP_ID="${{ steps.infra.outputs.ap_id }}"
           fi
 
-          # Set base path for test environments (for path-based routing)
-          if [ "$ENVIRONMENT" == "test" ]; then
-            BASE_PATH="/test/$BRANCH_SLUG"
-          else
-            BASE_PATH=""
-          fi
-
           cat > task-def.json << EOF
           {
             "family": "${TASK_FAMILY}",
@@ -462,8 +454,7 @@ jobs:
                 {"name": "ENVIRONMENT", "value": "${ENVIRONMENT}"},
                 {"name": "ENVIRONMENT_NAME", "value": "${ENVIRONMENT_NAME}"},
                 {"name": "PORT", "value": "3001"},
-                {"name": "DATA_DIR", "value": "/mnt/efs/data"},
-                {"name": "BASE_PATH", "value": "${BASE_PATH}"}
+                {"name": "DATA_DIR", "value": "/mnt/efs/data"}
               ],
               "mountPoints": [{"sourceVolume": "efs-data", "containerPath": "/mnt/efs/data", "readOnly": false}],
               "logConfiguration": {
@@ -590,9 +581,9 @@ jobs:
             echo "  Access staging via header:"
             echo "  curl -H 'X-Environment: staging' http://$ALB_DNS/api/health"
           else
-            echo "  Test Environment URL:"
-            echo "  http://$ALB_DNS/test/$BRANCH_SLUG/"
+            echo "  Test Environment Access:"
+            echo "  curl -H 'X-Branch: $BRANCH_SLUG' http://$ALB_DNS/"
             echo ""
-            echo "  Note: Access your test environment at /test/$BRANCH_SLUG/"
+            echo "  Or use browser extension to add header: X-Branch: $BRANCH_SLUG"
           fi
           echo "========================================"

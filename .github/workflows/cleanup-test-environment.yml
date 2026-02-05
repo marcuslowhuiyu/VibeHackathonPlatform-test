@@ -31,8 +31,8 @@ jobs:
         id: branch
         run: |
           BRANCH="${{ github.event.ref }}"
-          # Create the same slug as the deploy workflow
-          BRANCH_SLUG=$(echo "$BRANCH" | sed 's|/|-|g' | sed 's|[^a-zA-Z0-9-]||g' | tr '[:upper:]' '[:lower:]' | cut -c1-20)
+          # Create the same slug as the deploy workflow (16 chars max for AWS target group name limit)
+          BRANCH_SLUG=$(echo "$BRANCH" | sed 's|/|-|g' | sed 's|[^a-zA-Z0-9-]||g' | tr '[:upper:]' '[:lower:]' | cut -c1-16)
           echo "branch_slug=$BRANCH_SLUG" >> $GITHUB_OUTPUT
           echo "Cleaning up resources for branch: $BRANCH (slug: $BRANCH_SLUG)"
 
@@ -66,7 +66,7 @@ jobs:
         run: |
           BRANCH_SLUG="${{ steps.branch.outputs.branch_slug }}"
 
-          echo "Looking for ALB listener rule for /test/$BRANCH_SLUG"
+          echo "Looking for ALB listener rule with header X-Branch: $BRANCH_SLUG"
 
           # Get ALB and listener
           ALB_ARN=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
@@ -75,9 +75,9 @@ jobs:
             LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text 2>/dev/null || echo "")
 
             if [ -n "$LISTENER_ARN" ] && [ "$LISTENER_ARN" != "None" ]; then
-              # Find and delete the rule for this branch
+              # Find and delete the header-based rule for this branch
               RULE_ARN=$(aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
-                --query "Rules[?Conditions[?PathPatternConfig.Values[?contains(@, '/test/$BRANCH_SLUG')]]].RuleArn" \
+                --query "Rules[?Conditions[?HttpHeaderConfig.HttpHeaderName=='X-Branch' && contains(HttpHeaderConfig.Values, '$BRANCH_SLUG')]].RuleArn" \
                 --output text 2>/dev/null || echo "")
 
               if [ -n "$RULE_ARN" ] && [ "$RULE_ARN" != "None" ]; then
@@ -143,6 +143,6 @@ jobs:
           echo "  Resources cleaned up:"
           echo "  - ECS Service: vibe-test-$BRANCH_SLUG"
           echo "  - Target Group: vibe-test-$BRANCH_SLUG-tg"
-          echo "  - ALB Rule: /test/$BRANCH_SLUG/*"
+          echo "  - ALB Rule: X-Branch: $BRANCH_SLUG"
           echo "  - Task Definitions: vibe-test-$BRANCH_SLUG"
           echo "========================================"

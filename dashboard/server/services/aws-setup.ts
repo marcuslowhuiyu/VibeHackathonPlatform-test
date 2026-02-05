@@ -18,6 +18,7 @@ import {
   PutRolePolicyCommand,
   AttachRolePolicyCommand,
   GetRoleCommand,
+  UpdateAssumeRolePolicyCommand,
 } from '@aws-sdk/client-iam';
 import {
   CodeBuildClient,
@@ -367,9 +368,22 @@ export async function runFullSetup(
     report({ step: 'create_codebuild_role', status: 'in_progress', message: 'Creating CodeBuild service role...' });
     let codebuildRoleArn: string;
     const codebuildRoleName = 'codebuild-vibe-service-role';
+    let roleCreated = false;
     try {
       const existingRole = await clients.iam.send(new GetRoleCommand({ RoleName: codebuildRoleName }));
       codebuildRoleArn = existingRole.Role!.Arn!;
+
+      // Update trust policy to ensure CodeBuild can assume this role
+      try {
+        await clients.iam.send(new UpdateAssumeRolePolicyCommand({
+          RoleName: codebuildRoleName,
+          PolicyDocument: CODEBUILD_TRUST_POLICY,
+        }));
+      } catch (trustErr: any) {
+        console.log('Trust policy update:', trustErr.message);
+      }
+
+      // Update permissions policy
       try {
         await clients.iam.send(new PutRolePolicyCommand({
           RoleName: codebuildRoleName,
@@ -379,7 +393,7 @@ export async function runFullSetup(
       } catch {
         // Policy update failed
       }
-      report({ step: 'create_codebuild_role', status: 'skipped', message: 'CodeBuild role already exists', resourceId: codebuildRoleArn });
+      report({ step: 'create_codebuild_role', status: 'skipped', message: 'CodeBuild role already exists (updated trust policy)', resourceId: codebuildRoleArn });
     } catch {
       const roleResponse = await clients.iam.send(new CreateRoleCommand({
         RoleName: codebuildRoleName,
@@ -392,8 +406,17 @@ export async function runFullSetup(
         PolicyName: 'CodeBuildPermissions',
         PolicyDocument: getCodeBuildPolicy(accountId, AWS_REGION),
       }));
+      roleCreated = true;
       report({ step: 'create_codebuild_role', status: 'completed', message: 'Created CodeBuild service role', resourceId: codebuildRoleArn });
-      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+
+    // Wait for IAM role to propagate (important for newly created or updated roles)
+    if (roleCreated) {
+      report({ step: 'create_codebuild_role', status: 'in_progress', message: 'Waiting for IAM role to propagate...' });
+      await new Promise(resolve => setTimeout(resolve, 10000));
+    } else {
+      // Even for existing roles, wait a bit after trust policy update
+      await new Promise(resolve => setTimeout(resolve, 3000));
     }
 
     // Step 10: Create CodeBuild project

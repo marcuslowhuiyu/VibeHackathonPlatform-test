@@ -43,6 +43,16 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Version/build info - helps verify which code is deployed
+app.get('/api/version', (req, res) => {
+  res.json({
+    version: '2.1.0',
+    build: process.env.BUILD_SHA || 'local',
+    buildDate: '2026-02-05',
+    features: ['continue', 'cline', 'codebuild-setup'],
+  });
+});
+
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
   const clientDist = path.join(__dirname, '../client/dist');

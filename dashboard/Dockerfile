@@ -1,6 +1,9 @@
 # Build stage
 FROM node:20-alpine AS builder
 
+# Build argument for cache busting and version tracking
+ARG BUILD_SHA=local
+
 WORKDIR /app
 
 # Copy package files
@@ -19,6 +22,9 @@ RUN cd client && npm run build
 
 # Production stage
 FROM node:20-alpine
+
+# Build argument for version tracking
+ARG BUILD_SHA=local
 
 WORKDIR /app
 
@@ -39,6 +45,7 @@ RUN mkdir -p /app/data
 # Set environment variables
 ENV NODE_ENV=production
 ENV PORT=3001
+ENV BUILD_SHA=${BUILD_SHA}
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \

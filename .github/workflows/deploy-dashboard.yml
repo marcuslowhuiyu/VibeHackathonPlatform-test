@@ -61,8 +61,8 @@ jobs:
           BRANCH="${{ github.ref_name }}"
 
           # Create a slug from branch name (lowercase, replace special chars, truncate)
-          # AWS resource names have limits: target groups max 32 chars, services max 255
-          BRANCH_SLUG=$(echo "$BRANCH" | sed 's|/|-|g' | sed 's|[^a-zA-Z0-9-]||g' | tr '[:upper:]' '[:lower:]' | cut -c1-20)
+          # AWS target group names max 32 chars: "vibe-test-" (10) + slug (16) + "-tg" (3) = 29
+          BRANCH_SLUG=$(echo "$BRANCH" | sed 's|/|-|g' | sed 's|[^a-zA-Z0-9-]||g' | tr '[:upper:]' '[:lower:]' | cut -c1-16)
           echo "branch_slug=$BRANCH_SLUG" >> $GITHUB_OUTPUT
 
           # Determine environment type

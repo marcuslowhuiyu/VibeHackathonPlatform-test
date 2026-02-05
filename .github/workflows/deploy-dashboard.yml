@@ -569,13 +569,42 @@ jobs:
           # Check if service exists and its status
           SERVICE_STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
 
+          # If service exists, check if its target group matches
+          NEEDS_RECREATE="false"
           if [ "$SERVICE_STATUS" == "ACTIVE" ]; then
+            CURRENT_TG=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].loadBalancers[0].targetGroupArn' --output text 2>/dev/null || echo "")
+            if [ "$CURRENT_TG" != "$TG_ARN" ]; then
+              echo "Target group changed from $CURRENT_TG to $TG_ARN"
+              echo "Service must be recreated (can't change load balancer config on existing service)"
+              NEEDS_RECREATE="true"
+            fi
+          fi
+
+          if [ "$SERVICE_STATUS" == "ACTIVE" ] && [ "$NEEDS_RECREATE" == "false" ]; then
             echo "Updating existing service..."
             aws ecs update-service \
               --cluster ${{ env.ECS_CLUSTER }} \
               --service $ECS_SERVICE_NAME \
               --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
               --force-new-deployment
+          elif [ "$SERVICE_STATUS" == "ACTIVE" ] && [ "$NEEDS_RECREATE" == "true" ]; then
+            echo "Deleting service to recreate with new target group..."
+            aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SERVICE_NAME --desired-count 0 2>/dev/null || true
+            aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SERVICE_NAME --force
+            echo "Waiting for service to be deleted..."
+            sleep 10
+
+            echo "Creating new service with new target group..."
+            aws ecs create-service \
+              --cluster ${{ env.ECS_CLUSTER }} \
+              --service-name $ECS_SERVICE_NAME \
+              --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
+              --desired-count 1 \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_IDS],securityGroups=[$ECS_SG_ID],assignPublicIp=ENABLED}" \
+              --load-balancers "targetGroupArn=$TG_ARN,containerName=${{ env.CONTAINER_NAME }},containerPort=3001" \
+              --deployment-configuration "minimumHealthyPercent=0,maximumPercent=200" \
+              --health-check-grace-period-seconds 60
           elif [ "$SERVICE_STATUS" == "DRAINING" ]; then
             echo "Service is draining, waiting for it to complete..."
             while true; do

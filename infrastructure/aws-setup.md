@@ -331,19 +331,44 @@ aws iam put-role-policy \
 ### 9b. Create CodeBuild Project (via Console)
 
 1. Go to **CodeBuild** → **Create build project**
-2. **Project name**: `vibe-coding-lab-builder`
-3. **Source**: GitHub (connect your repository)
+
+2. **Project configuration**:
+   - **Project name**: `vibe-coding-lab-builder`
+
+3. **Source** (IMPORTANT):
+   - **Source provider**: GitHub
+   - Click **Connect to GitHub** if not already connected
+   - **Repository**: Select "Repository in my GitHub account"
+   - **GitHub repository**: Select your fork of `VibeHackathonPlatform`
+   - **Source version**: Leave blank (uses default branch)
+
 4. **Environment**:
-   - **Managed image**
+   - **Environment image**: Managed image
    - **Operating system**: Ubuntu
    - **Runtime**: Standard
    - **Image**: `aws/codebuild/standard:7.0`
-   - **Privileged**: ✅ Enabled (required for Docker)
-   - **Service role**: `codebuild-vibe-service-role`
-5. **Buildspec**: Use buildspec file in repository or inline
-6. Click **Create build project**
+   - **Privileged**: ✅ **MUST BE ENABLED** (required for Docker builds)
+   - **Service role**: Existing service role → `codebuild-vibe-service-role`
 
-> **Note**: The dashboard's automated setup can create this project for you if the service role exists.
+5. **Buildspec**:
+   - Select "Use a buildspec file"
+   - Leave buildspec name blank (uses buildspec.yml from repo, or inline in project)
+
+6. **Artifacts**: No artifacts
+
+7. Click **Create build project**
+
+### 9c. Add Environment Variables
+
+After creating the project, add these environment variables:
+
+1. Go to **CodeBuild** → `vibe-coding-lab-builder` → **Edit** → **Environment**
+2. Under **Additional configuration** → **Environment variables**, add:
+   - `AWS_ACCOUNT_ID`: Your AWS account ID (e.g., `902707424595`)
+   - `AWS_DEFAULT_REGION`: Your region (e.g., `ap-southeast-1`)
+3. Click **Update environment**
+
+> **Note**: The dashboard's automated setup can create this project for you if the service role exists, but you must manually connect the GitHub source.
 
 ## Outputs to Save
 

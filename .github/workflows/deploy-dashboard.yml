@@ -526,7 +526,7 @@ jobs:
                 {"name": "ENVIRONMENT", "value": "${ENVIRONMENT}"},
                 {"name": "ENVIRONMENT_NAME", "value": "${ENVIRONMENT_NAME}"},
                 {"name": "PORT", "value": "3001"},
-                {"name": "DATA_DIR", "value": "/mnt/efs/data"}
+                {"name": "DATA_DIR", "value": "/mnt/efs/data/${ENVIRONMENT_NAME}"}
               ],
               "mountPoints": [{"sourceVolume": "efs-data", "containerPath": "/mnt/efs/data", "readOnly": false}],
               "logConfiguration": {

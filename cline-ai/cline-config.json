@@ -7,5 +7,6 @@
     "enabled": false,
     "maxRequests": 10,
     "enableNotifications": true
-  }
+  },
+  "_buildTrigger": "2026-02-05-cline-support"
 }

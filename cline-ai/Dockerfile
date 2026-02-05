@@ -2,7 +2,7 @@
 FROM gitpod/openvscode-server:latest
 
 # Build arguments for customization
-ARG CLINE_VERSION=3.14.1
+ARG CLINE_VERSION=3.56.2
 
 # Switch to root to perform system installations
 USER root
@@ -19,7 +19,7 @@ RUN chown -R openvscode-server:openvscode-server /home/workspace
 
 # 4. Install Cline AI Extension (formerly Claude Dev)
 RUN echo "Installing Cline extension..." && \
-    wget -O /tmp/cline.vsix "https://open-vsx.org/api/saoudrizwan/claude-dev/linux-x64/${CLINE_VERSION}/file/saoudrizwan.claude-dev-${CLINE_VERSION}@linux-x64.vsix" && \
+    wget -O /tmp/cline.vsix "https://open-vsx.org/api/saoudrizwan/claude-dev/${CLINE_VERSION}/file/saoudrizwan.claude-dev-${CLINE_VERSION}.vsix" && \
     mkdir -p /home/.openvscode-server/extensions/saoudrizwan.claude-dev-${CLINE_VERSION} && \
     unzip -q /tmp/cline.vsix -d /tmp/cline-ext && \
     cp -r /tmp/cline-ext/extension/* /home/.openvscode-server/extensions/saoudrizwan.claude-dev-${CLINE_VERSION}/ && \

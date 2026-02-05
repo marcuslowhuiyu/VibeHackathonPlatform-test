@@ -406,15 +406,48 @@ jobs:
           # Check if target group exists
           TG_ARN=$(aws elbv2 describe-target-groups --names $TG_NAME --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
 
-          if [ "$TG_ARN" == "None" ] || [ -z "$TG_ARN" ]; then
-            echo "Creating target group: $TG_NAME"
-            TG_ARN=$(aws elbv2 create-target-group \
-              --name $TG_NAME \
-              --protocol HTTP --port 3001 \
-              --vpc-id $VPC_ID --target-type ip \
-              --health-check-path /api/health \
-              --query 'TargetGroups[0].TargetGroupArn' --output text)
+          if [ "$TG_ARN" != "None" ] && [ -n "$TG_ARN" ]; then
+            # Target group exists - check if it's associated with a different ALB
+            # We need to delete any old listener rules using this TG before we can use it with new ALB
+            echo "Target group exists: $TG_ARN"
+            echo "Checking for old associations..."
+
+            # Find all load balancers and check their listeners for rules using this TG
+            OLD_ALBS=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[*].LoadBalancerArn' --output text 2>/dev/null || echo "")
+            for OLD_ALB in $OLD_ALBS; do
+              if [ "$OLD_ALB" != "$ALB_ARN" ]; then
+                OLD_LISTENERS=$(aws elbv2 describe-listeners --load-balancer-arn $OLD_ALB --query 'Listeners[*].ListenerArn' --output text 2>/dev/null || echo "")
+                for OLD_LISTENER in $OLD_LISTENERS; do
+                  # Find rules using our target group
+                  RULE_ARNS=$(aws elbv2 describe-rules --listener-arn $OLD_LISTENER --query "Rules[?Actions[?TargetGroupArn=='$TG_ARN']].RuleArn" --output text 2>/dev/null || echo "")
+                  for RULE_ARN in $RULE_ARNS; do
+                    if [ -n "$RULE_ARN" ] && [ "$RULE_ARN" != "None" ]; then
+                      # Check if it's the default rule (can't delete those)
+                      IS_DEFAULT=$(aws elbv2 describe-rules --rule-arns $RULE_ARN --query 'Rules[0].IsDefault' --output text 2>/dev/null || echo "false")
+                      if [ "$IS_DEFAULT" != "true" ]; then
+                        echo "Deleting old listener rule: $RULE_ARN"
+                        aws elbv2 delete-rule --rule-arn $RULE_ARN 2>/dev/null || true
+                      fi
+                    fi
+                  done
+                done
+              fi
+            done
+
+            # Delete the old target group and create fresh
+            echo "Deleting old target group to avoid association conflicts..."
+            aws elbv2 delete-target-group --target-group-arn $TG_ARN 2>/dev/null || true
+            sleep 2
           fi
+
+          # Create fresh target group
+          echo "Creating target group: $TG_NAME"
+          TG_ARN=$(aws elbv2 create-target-group \
+            --name $TG_NAME \
+            --protocol HTTP --port 3001 \
+            --vpc-id $VPC_ID --target-type ip \
+            --health-check-path /api/health \
+            --query 'TargetGroups[0].TargetGroupArn' --output text)
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
 
           # Check if listener exists, create if not

@@ -36,8 +36,14 @@ A complete platform for running coding hackathons with cloud-based VS Code insta
 ### Each Coding Instance Includes
 - **VS Code Server** - Full VS Code IDE in the browser (port 8080)
 - **React Dev Server** - Live preview of their app (port 3000)
-- **Continue AI** - Pre-configured AI assistant using AWS Bedrock (Claude)
+- **AI Coding Assistant** - Choice of Continue or Cline, pre-configured with AWS Bedrock (Claude)
 - **HTTPS Access** - CloudFront distribution for secure connections
+
+### AI Tool Options
+| Tool | Description | Best For |
+|------|-------------|----------|
+| **Continue** | Open-source AI coding assistant with chat and autocomplete | General coding assistance, tab completion |
+| **Cline** | Autonomous AI agent that can edit files and run commands | Complex multi-file tasks, agentic workflows |
 
 ## Architecture
 
@@ -223,6 +229,32 @@ Or attach these AWS managed policies:
 | **CodeBuild** | Builds Docker images from dashboard (when Docker unavailable) |
 | **IAM** | Creates service roles for ECS and CodeBuild |
 
+## Branch-Based Deployments
+
+Each branch automatically deploys to its own isolated environment:
+
+| Branch | Environment | Access |
+|--------|-------------|--------|
+| `main` | Production | `https://<cloudfront>/` |
+| `dev` | Staging | `https://<staging-cloudfront>/` |
+| `feature/*`, `bugfix/*`, `test/*` | Test | `http://<alb>/test/<branch-slug>/` |
+
+### How It Works
+1. Push to any `feature/`, `bugfix/`, `hotfix/`, or `test/` branch
+2. GitHub Actions builds and deploys to an isolated test environment
+3. Access your test environment at the URL shown in the workflow output
+4. When the branch is deleted, resources are automatically cleaned up
+
+### Branch Naming Convention
+Branches must follow this format: `type/issue-number[-description]`
+
+```
+feature/42              # Feature for issue #42
+feature/42-add-login    # Feature for issue #42 with description
+bugfix/15-fix-crash     # Bug fix for issue #15
+hotfix/99               # Urgent fix for issue #99
+```
+
 ## Deployment
 
 See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for detailed instructions including:
@@ -263,10 +295,18 @@ VibeHackathonPlatform/
 │   │   ├── middleware/       # Auth middleware (JWT)
 │   │   └── db/               # JSON database
 │   └── Dockerfile            # Dashboard container
-├── docker/                    # Coding instance container
+├── cline-setup/              # Continue AI coding instance
 │   ├── Dockerfile            # VS Code + React + Continue
-│   └── config/               # Extension configurations
+│   ├── entrypoint.sh         # Container startup script
+│   └── cline-config.json     # Continue configuration
+├── cline-ai/                 # Cline AI coding instance
+│   ├── Dockerfile            # VS Code + React + Cline
+│   ├── entrypoint.sh         # Container startup script
+│   └── cline-config.json     # Cline configuration
 ├── .github/workflows/        # GitHub Actions (auto-deploy)
+│   ├── deploy-dashboard.yml  # Main deployment workflow
+│   ├── cleanup-test-environment.yml  # Cleanup on branch delete
+│   └── pr-validation.yml     # PR validation checks
 ├── DEPLOYMENT.md             # Deployment guide
 └── README.md                 # This file
 ```
@@ -372,7 +412,7 @@ MIT - Feel free to use for your own hackathons!
 ## Contributing
 
 1. Fork the repository
-2. Create a feature branch
+2. Create a feature branch (e.g., `feature/42-add-feature`)
 3. Make your changes
-4. Submit a pull request
-# Test direct push
+4. Submit a pull request to `dev`
+5. After review, merge to `dev`, then `dev` to `main`

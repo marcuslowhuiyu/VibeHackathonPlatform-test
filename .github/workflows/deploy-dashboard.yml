@@ -6,6 +6,7 @@ on:
     paths:
       - 'dashboard/**'
       - 'cline-setup/**'
+      - 'cline-ai/**'
       - '.github/workflows/deploy-dashboard.yml'
   workflow_dispatch:
     inputs:
@@ -108,22 +109,40 @@ jobs:
       - name: Check if coding lab changed
         id: changes
         run: |
+          # Check if Continue setup changed
           if git diff --name-only HEAD~1 HEAD | grep -q "^cline-setup/"; then
-            echo "coding_lab_changed=true" >> $GITHUB_OUTPUT
+            echo "continue_changed=true" >> $GITHUB_OUTPUT
           else
-            echo "coding_lab_changed=false" >> $GITHUB_OUTPUT
+            echo "continue_changed=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build and push Coding Lab image (only if changed)
-        if: steps.changes.outputs.coding_lab_changed == 'true' || github.event_name == 'workflow_dispatch'
+          # Check if Cline setup changed
+          if git diff --name-only HEAD~1 HEAD | grep -q "^cline-ai/"; then
+            echo "cline_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "cline_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and push Continue image (only if changed)
+        if: steps.changes.outputs.continue_changed == 'true' || github.event_name == 'workflow_dispatch'
         uses: docker/build-push-action@v5
         with:
           context: ./cline-setup
           push: true
-          build-args: AI_EXTENSION=continue
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:continue
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Cline image (only if changed)
+        if: steps.changes.outputs.cline_changed == 'true' || github.event_name == 'workflow_dispatch'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./cline-ai
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:cline
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

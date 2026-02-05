@@ -481,7 +481,7 @@ phases:
         environment: {
           type: 'LINUX_CONTAINER',
           computeType: 'BUILD_GENERAL1_MEDIUM',
-          image: 'aws/codebuild/amazonlinux2-x86_64-standard:5.0',
+          image: 'aws/codebuild/standard:7.0', // Ubuntu - works in all regions
           privilegedMode: true,
           environmentVariables: [
             { name: 'AWS_ACCOUNT_ID', value: accountId },

@@ -257,6 +257,94 @@ EOF
 aws ecs register-task-definition --cli-input-json file://task-definition.json
 ```
 
+## Step 9: Create CodeBuild Project (for Docker Image Building)
+
+The dashboard can build Docker images via AWS CodeBuild. This requires a service role and project.
+
+### 9a. Create CodeBuild Service Role
+
+```bash
+# Create trust policy
+cat > codebuild-trust-policy.json << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "codebuild.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+
+# Create the role
+aws iam create-role \
+    --role-name codebuild-vibe-service-role \
+    --assume-role-policy-document file://codebuild-trust-policy.json
+
+# Create permissions policy
+cat > codebuild-policy.json << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["ecr:GetAuthorizationToken"],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:PutImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload"
+      ],
+      "Resource": "arn:aws:ecr:*:*:repository/vibe-coding-lab"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:log-group:/aws/codebuild/*"
+    }
+  ]
+}
+EOF
+
+# Attach the policy
+aws iam put-role-policy \
+    --role-name codebuild-vibe-service-role \
+    --policy-name CodeBuildPermissions \
+    --policy-document file://codebuild-policy.json
+```
+
+### 9b. Create CodeBuild Project (via Console)
+
+1. Go to **CodeBuild** → **Create build project**
+2. **Project name**: `vibe-coding-lab-builder`
+3. **Source**: GitHub (connect your repository)
+4. **Environment**:
+   - **Managed image**
+   - **Operating system**: Ubuntu
+   - **Runtime**: Standard
+   - **Image**: `aws/codebuild/standard:7.0`
+   - **Privileged**: ✅ Enabled (required for Docker)
+   - **Service role**: `codebuild-vibe-service-role`
+5. **Buildspec**: Use buildspec file in repository or inline
+6. Click **Create build project**
+
+> **Note**: The dashboard's automated setup can create this project for you if the service role exists.
+
 ## Outputs to Save
 
 After completing setup, save these values for the dashboard configuration:

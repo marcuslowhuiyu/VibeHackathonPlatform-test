@@ -350,18 +350,58 @@ jobs:
 
           aws iam put-role-policy --role-name ecsTaskRole --policy-name efs-access --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"elasticfilesystem:ClientMount\",\"elasticfilesystem:ClientWrite\",\"elasticfilesystem:ClientRootAccess\"],\"Resource\":\"arn:aws:elasticfilesystem:${{ env.AWS_REGION }}:${AWS_ACCOUNT_ID}:file-system/${EFS_ID}\"}]}"
 
-      - name: Setup environment-specific target group and routing
+      - name: Setup environment-specific ALB and target group
         id: env-setup
         run: |
           VPC_ID="${{ steps.infra.outputs.vpc_id }}"
+          SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
           ENVIRONMENT="${{ needs.build.outputs.environment }}"
           TG_NAME="${{ needs.build.outputs.tg_name }}"
           BRANCH_SLUG="${{ needs.build.outputs.branch_slug }}"
 
-          # Get ALB ARN and listener
-          ALB_ARN=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text)
-          LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text)
-          echo "listener_arn=$LISTENER_ARN" >> $GITHUB_OUTPUT
+          # Get or create ALB security group
+          ALB_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=vibe-dashboard-alb-sg" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+          if [ "$ALB_SG_ID" == "None" ] || [ -z "$ALB_SG_ID" ]; then
+            ALB_SG_ID=$(aws ec2 create-security-group --group-name vibe-dashboard-alb-sg --description "Vibe Dashboard ALB" --vpc-id $VPC_ID --query 'GroupId' --output text)
+            aws ec2 authorize-security-group-ingress --group-id $ALB_SG_ID --protocol tcp --port 80 --cidr 0.0.0.0/0
+            aws ec2 authorize-security-group-ingress --group-id $ALB_SG_ID --protocol tcp --port 443 --cidr 0.0.0.0/0
+          fi
+
+          # Determine ALB name based on environment
+          if [ "$ENVIRONMENT" == "production" ]; then
+            ALB_NAME="vibe-dashboard-alb"
+          elif [ "$ENVIRONMENT" == "staging" ]; then
+            ALB_NAME="vibe-dashboard-staging-alb"
+          else
+            # Feature branch gets its own ALB
+            ALB_NAME="vibe-test-${BRANCH_SLUG}-alb"
+            # Truncate to 32 chars max for ALB name
+            ALB_NAME=$(echo "$ALB_NAME" | cut -c1-32)
+          fi
+          echo "alb_name=$ALB_NAME" >> $GITHUB_OUTPUT
+
+          # Check if ALB exists, create if not
+          ALB_ARN=$(aws elbv2 describe-load-balancers --names $ALB_NAME --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
+
+          if [ "$ALB_ARN" == "None" ] || [ -z "$ALB_ARN" ]; then
+            echo "Creating ALB: $ALB_NAME"
+            SUBNET_LIST=$(echo $SUBNET_IDS | tr ',' ' ')
+            ALB_ARN=$(aws elbv2 create-load-balancer \
+              --name $ALB_NAME \
+              --subnets $SUBNET_LIST \
+              --security-groups $ALB_SG_ID \
+              --scheme internet-facing \
+              --type application \
+              --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+
+            echo "Waiting for ALB to be active..."
+            aws elbv2 wait load-balancer-available --load-balancer-arns $ALB_ARN
+          fi
+          echo "alb_arn=$ALB_ARN" >> $GITHUB_OUTPUT
+
+          # Get ALB DNS
+          ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].DNSName' --output text)
+          echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
 
           # Check if target group exists
           TG_ARN=$(aws elbv2 describe-target-groups --names $TG_NAME --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
@@ -377,57 +417,25 @@ jobs:
           fi
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
 
-          # Set up routing rules based on environment type
-          if [ "$ENVIRONMENT" == "production" ]; then
-            # Production is the default route - no special rule needed
-            echo "Production uses default listener rule"
-          elif [ "$ENVIRONMENT" == "staging" ]; then
-            # Staging uses header-based routing
-            RULE_EXISTS=$(aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
-              --query "Rules[?Conditions[?HttpHeaderConfig.HttpHeaderName=='X-Environment' && contains(HttpHeaderConfig.Values, 'staging')]].RuleArn" \
-              --output text 2>/dev/null || echo "")
+          # Check if listener exists, create if not
+          LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text 2>/dev/null || echo "")
 
-            if [ -z "$RULE_EXISTS" ] || [ "$RULE_EXISTS" == "None" ]; then
-              echo "Creating header-based routing rule for staging..."
-              aws elbv2 create-rule \
-                --listener-arn $LISTENER_ARN \
-                --conditions Field=http-header,HttpHeaderConfig="{HttpHeaderName=X-Environment,Values=[staging]}" \
-                --actions Type=forward,TargetGroupArn=$TG_ARN \
-                --priority 10
-            fi
-          else
-            # Feature/test branches use header-based routing: X-Branch: <branch-slug>
-            RULE_EXISTS=$(aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
-              --query "Rules[?Conditions[?HttpHeaderConfig.HttpHeaderName=='X-Branch' && contains(HttpHeaderConfig.Values, '$BRANCH_SLUG')]].RuleArn" \
-              --output text 2>/dev/null || echo "")
-
-            if [ -z "$RULE_EXISTS" ] || [ "$RULE_EXISTS" == "None" ]; then
-              echo "Creating header-based routing rule for test environment: X-Branch: $BRANCH_SLUG"
-
-              # Find an available priority (start from 100 for test environments)
-              PRIORITY=100
-              while true; do
-                PRIORITY_EXISTS=$(aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
-                  --query "Rules[?Priority=='$PRIORITY'].RuleArn" --output text 2>/dev/null || echo "")
-                if [ -z "$PRIORITY_EXISTS" ] || [ "$PRIORITY_EXISTS" == "None" ]; then
-                  break
-                fi
-                PRIORITY=$((PRIORITY + 1))
-                if [ $PRIORITY -gt 500 ]; then
-                  echo "Error: Could not find available priority"
-                  exit 1
-                fi
-              done
-
-              aws elbv2 create-rule \
-                --listener-arn $LISTENER_ARN \
-                --conditions Field=http-header,HttpHeaderConfig="{HttpHeaderName=X-Branch,Values=[$BRANCH_SLUG]}" \
-                --actions Type=forward,TargetGroupArn=$TG_ARN \
-                --priority $PRIORITY
-
-              echo "Created rule with priority $PRIORITY"
-            fi
+          if [ -z "$LISTENER_ARN" ] || [ "$LISTENER_ARN" == "None" ]; then
+            echo "Creating listener for ALB"
+            LISTENER_ARN=$(aws elbv2 create-listener \
+              --load-balancer-arn $ALB_ARN \
+              --protocol HTTP --port 80 \
+              --default-actions Type=forward,TargetGroupArn=$TG_ARN \
+              --query 'Listeners[0].ListenerArn' --output text)
           fi
+          echo "listener_arn=$LISTENER_ARN" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "========================================"
+          echo "  ALB Setup Complete"
+          echo "  ALB Name: $ALB_NAME"
+          echo "  ALB DNS:  $ALB_DNS"
+          echo "========================================"
 
       - name: Get ECR registry
         id: ecr
@@ -581,8 +589,8 @@ jobs:
           ENVIRONMENT_NAME="${{ needs.build.outputs.environment_name }}"
           ECS_SERVICE_NAME="${{ needs.build.outputs.ecs_service }}"
           BRANCH_SLUG="${{ needs.build.outputs.branch_slug }}"
-          ALB_DNS=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].DNSName' --output text)
-          CF_DOMAIN=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[0].DomainName=='$ALB_DNS'].DomainName" --output text 2>/dev/null || echo "")
+          ALB_DNS="${{ steps.env-setup.outputs.alb_dns }}"
+          ALB_NAME="${{ steps.env-setup.outputs.alb_name }}"
 
           echo ""
           echo "========================================"
@@ -592,38 +600,18 @@ jobs:
           echo "  Environment: $ENVIRONMENT_NAME"
           echo "  Service: $ECS_SERVICE_NAME"
           echo "  Branch: ${{ github.ref_name }}"
+          echo "  ALB: $ALB_NAME"
           echo ""
-          if [ "$ENVIRONMENT" == "production" ]; then
-            BASE_URL="http://$ALB_DNS"
-            if [ -n "$CF_DOMAIN" ] && [ "$CF_DOMAIN" != "None" ]; then
-              BASE_URL="https://$CF_DOMAIN"
-            fi
-            echo "  URLs:"
-            echo "    Participant Entry: $BASE_URL/#/enter"
-            echo "    Admin Dashboard:   $BASE_URL/#/admin"
-            echo "    Admin Login:       $BASE_URL/#/login"
-            echo "    Health Check:      $BASE_URL/api/health"
-          elif [ "$ENVIRONMENT" == "staging" ]; then
-            echo "  Access via header: X-Environment: staging"
-            echo ""
-            echo "  URLs (add header to requests):"
-            echo "    Participant Entry: http://$ALB_DNS/#/enter"
-            echo "    Admin Dashboard:   http://$ALB_DNS/#/admin"
-            echo "    Admin Login:       http://$ALB_DNS/#/login"
-            echo "    Health Check:      http://$ALB_DNS/api/health"
-            echo ""
-            echo "  Example: curl -H 'X-Environment: staging' http://$ALB_DNS/api/health"
-          else
-            echo "  Access via header: X-Branch: $BRANCH_SLUG"
-            echo ""
-            echo "  URLs (add header to requests):"
-            echo "    Participant Entry: http://$ALB_DNS/#/enter"
-            echo "    Admin Dashboard:   http://$ALB_DNS/#/admin"
-            echo "    Admin Login:       http://$ALB_DNS/#/login"
-            echo "    Health Check:      http://$ALB_DNS/api/health"
-            echo ""
-            echo "  Example: curl -H 'X-Branch: $BRANCH_SLUG' http://$ALB_DNS/api/health"
-            echo ""
-            echo "  Browser: Use ModHeader extension to add header"
+          echo "  URLs (direct access - no headers needed):"
+          echo "    Dashboard:    http://$ALB_DNS"
+          echo "    Admin Login:  http://$ALB_DNS/#/login"
+          echo "    Admin Panel:  http://$ALB_DNS/#/admin"
+          echo "    Participant:  http://$ALB_DNS/#/enter"
+          echo "    Health Check: http://$ALB_DNS/api/health"
+          echo "    Version:      http://$ALB_DNS/api/version"
+          echo ""
+          if [ "$ENVIRONMENT" == "test" ]; then
+            echo "  Note: This is a feature branch deployment with its own ALB."
+            echo "  Main branch (production) remains unaffected at vibe-dashboard-alb"
           fi
           echo "========================================"

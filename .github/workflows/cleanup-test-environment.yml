@@ -61,33 +61,36 @@ jobs:
             echo "ECS service not found, skipping"
           fi
 
-      - name: Delete ALB Listener Rule
+      - name: Delete Branch-Specific ALB
         continue-on-error: true
         run: |
           BRANCH_SLUG="${{ steps.branch.outputs.branch_slug }}"
+          ALB_NAME="vibe-test-${BRANCH_SLUG}-alb"
+          # Truncate to match deploy workflow
+          ALB_NAME=$(echo "$ALB_NAME" | cut -c1-32)
 
-          echo "Looking for ALB listener rule with header X-Branch: $BRANCH_SLUG"
+          echo "Looking for branch-specific ALB: $ALB_NAME"
 
-          # Get ALB and listener
-          ALB_ARN=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
+          ALB_ARN=$(aws elbv2 describe-load-balancers --names $ALB_NAME --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
 
           if [ "$ALB_ARN" != "None" ] && [ -n "$ALB_ARN" ]; then
-            LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text 2>/dev/null || echo "")
+            echo "Found ALB: $ALB_ARN"
 
-            if [ -n "$LISTENER_ARN" ] && [ "$LISTENER_ARN" != "None" ]; then
-              # Find and delete the header-based rule for this branch
-              RULE_ARN=$(aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
-                --query "Rules[?Conditions[?HttpHeaderConfig.HttpHeaderName=='X-Branch' && contains(HttpHeaderConfig.Values, '$BRANCH_SLUG')]].RuleArn" \
-                --output text 2>/dev/null || echo "")
-
-              if [ -n "$RULE_ARN" ] && [ "$RULE_ARN" != "None" ]; then
-                echo "Deleting ALB listener rule: $RULE_ARN"
-                aws elbv2 delete-rule --rule-arn $RULE_ARN
-                echo "ALB listener rule deleted"
-              else
-                echo "No ALB listener rule found for this branch"
+            # First, delete all listeners
+            LISTENER_ARNS=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[*].ListenerArn' --output text 2>/dev/null || echo "")
+            for LISTENER_ARN in $LISTENER_ARNS; do
+              if [ -n "$LISTENER_ARN" ] && [ "$LISTENER_ARN" != "None" ]; then
+                echo "Deleting listener: $LISTENER_ARN"
+                aws elbv2 delete-listener --listener-arn $LISTENER_ARN 2>/dev/null || true
               fi
-            fi
+            done
+
+            # Then delete the ALB
+            echo "Deleting ALB: $ALB_NAME"
+            aws elbv2 delete-load-balancer --load-balancer-arn $ALB_ARN
+            echo "ALB deleted"
+          else
+            echo "No branch-specific ALB found"
           fi
 
       - name: Delete Target Group
@@ -132,6 +135,8 @@ jobs:
       - name: Cleanup Summary
         run: |
           BRANCH_SLUG="${{ steps.branch.outputs.branch_slug }}"
+          ALB_NAME="vibe-test-${BRANCH_SLUG}-alb"
+          ALB_NAME=$(echo "$ALB_NAME" | cut -c1-32)
           echo ""
           echo "========================================"
           echo "  CLEANUP COMPLETE"
@@ -142,7 +147,7 @@ jobs:
           echo ""
           echo "  Resources cleaned up:"
           echo "  - ECS Service: vibe-test-$BRANCH_SLUG"
+          echo "  - ALB: $ALB_NAME"
           echo "  - Target Group: vibe-test-$BRANCH_SLUG-tg"
-          echo "  - ALB Rule: X-Branch: $BRANCH_SLUG"
           echo "  - Task Definitions: vibe-test-$BRANCH_SLUG"
           echo "========================================"

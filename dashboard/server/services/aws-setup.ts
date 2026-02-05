@@ -569,13 +569,15 @@ export async function checkDockerAvailable(): Promise<{ available: boolean; mess
 // AI EXTENSION CONFIGURATION
 // Add new AI extensions here to scale support
 // ==========================================
-// To add new extensions:
-// 1. Add to this array: ['continue', 'cline', 'roo-code']
-// 2. Update the Dockerfile to install the extension
-// 3. Update entrypoint.sh to configure the extension
-// 4. Update frontend AI_EXTENSIONS configs
-export const AI_EXTENSIONS = ['continue'] as const;
+// Each extension has its own directory with Dockerfile, entrypoint.sh, and config
+export const AI_EXTENSIONS = ['continue', 'cline'] as const;
 export type AIExtension = typeof AI_EXTENSIONS[number];
+
+// Map extensions to their Dockerfile directories
+export const EXTENSION_DIRECTORIES: Record<AIExtension, string> = {
+  continue: 'cline-setup',  // Continue uses the cline-setup directory (historical naming)
+  cline: 'cline-ai',        // Cline uses the cline-ai directory
+};
 
 export async function buildAndPushImage(
   onProgress?: (result: DockerBuildResult) => void,
@@ -636,17 +638,18 @@ export async function buildAndPushImage(
 
     // Determine which extensions to build
     const extensionsToBuild = extensions || [getConfig('ai_extension') as AIExtension || 'continue'];
-    const dockerfilePath = path.resolve(__dirname, '../../../cline-setup');
 
     report({ success: true, step: 'get_extension', message: `Building extensions: ${extensionsToBuild.join(', ')}` });
 
     // Build, tag, and push each extension
     for (const ext of extensionsToBuild) {
-      const extTag = ext; // Tag will be :continue
+      const extTag = ext; // Tag will be :continue or :cline
+      const extDir = EXTENSION_DIRECTORIES[ext];
+      const dockerfilePath = path.resolve(__dirname, `../../../${extDir}`);
 
       // Build Docker image
-      report({ success: true, step: `docker_build_${ext}`, message: `Building ${ext} image (this may take several minutes)...` });
-      const buildCmd = `docker build --no-cache --build-arg AI_EXTENSION=${ext} -t vibe-coding-lab:${extTag} "${dockerfilePath}"`;
+      report({ success: true, step: `docker_build_${ext}`, message: `Building ${ext} image from ${extDir}/ (this may take several minutes)...` });
+      const buildCmd = `docker build --no-cache -t vibe-coding-lab:${extTag} "${dockerfilePath}"`;
       await execAsync(buildCmd, { maxBuffer: 50 * 1024 * 1024, timeout: 600000 }); // 50MB buffer, 10min timeout
       report({ success: true, step: `docker_build_${ext}`, message: `Docker image built successfully: ${ext}` });
 

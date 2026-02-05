@@ -5,7 +5,7 @@ import { Plus, Loader2, Minus, AlertTriangle, CheckCircle, Package, Bot, Users }
 // AI EXTENSION CONFIGURATION
 // Add new AI extensions here to scale support
 // ==========================================
-type AIExtension = 'continue'
+type AIExtension = 'continue' | 'cline'
 // To add more extensions, update the type:
 // type AIExtension = 'continue' | 'cline' | 'roo-code'
 
@@ -25,14 +25,13 @@ const AI_EXTENSIONS: Record<AIExtension, ExtensionConfig> = {
     bgColor: 'bg-emerald-600',
     enabled: true,
   },
-  // To add new extensions, uncomment and configure:
-  // cline: {
-  //   name: 'Cline',
-  //   description: 'Autonomous AI coding agent',
-  //   color: 'text-violet-400',
-  //   bgColor: 'bg-violet-600',
-  //   enabled: false,
-  // },
+  cline: {
+    name: 'Cline',
+    description: 'Autonomous AI coding agent',
+    color: 'text-violet-400',
+    bgColor: 'bg-violet-600',
+    enabled: true,
+  },
   // 'roo-code': {
   //   name: 'Roo Code',
   //   description: 'Enhanced Cline fork with additional features',

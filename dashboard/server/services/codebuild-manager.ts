@@ -58,7 +58,7 @@ export async function createProject(
   const creds = getCredentials();
   if (!creds) throw new Error('AWS credentials not configured');
 
-  // Create the buildspec inline
+  // Create the buildspec inline - builds both Continue and Cline extensions
   const buildspec = `version: 0.2
 phases:
   pre_build:
@@ -67,15 +67,22 @@ phases:
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
   build:
     commands:
-      - echo Building the Docker image...
+      - echo "=== Building Continue extension from cline-setup/ ==="
       - cd cline-setup
-      - docker build --build-arg AI_EXTENSION=continue -t vibe-coding-lab:continue .
+      - docker build -t vibe-coding-lab:continue .
       - docker tag vibe-coding-lab:continue $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
       - docker tag vibe-coding-lab:continue $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
+      - cd ..
+      - echo "=== Building Cline extension from cline-ai/ ==="
+      - cd cline-ai
+      - docker build -t vibe-coding-lab:cline .
+      - docker tag vibe-coding-lab:cline $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
+      - cd ..
   post_build:
     commands:
-      - echo Pushing the Docker image...
+      - echo Pushing the Docker images...
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
       - echo Build completed on \`date\`
 `;

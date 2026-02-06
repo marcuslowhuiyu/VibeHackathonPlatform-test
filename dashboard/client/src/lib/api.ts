@@ -390,4 +390,30 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ extension }),
     }),
+
+  // Shared ALB/CloudFront Setup
+  getSharedALBStatus: () =>
+    fetchJson<{
+      configured: boolean
+      albArn?: string
+      albDnsName?: string
+      listenerArn?: string
+      cloudfrontDistributionId?: string
+      cloudfrontDomain?: string
+    }>('/setup/shared-alb/status'),
+
+  setupSharedALB: () =>
+    fetchJson<{
+      success: boolean
+      steps: { step: string; status: string; message?: string }[]
+      config: {
+        albArn: string
+        albDnsName: string
+        listenerArn: string
+        cloudfrontDistributionId: string
+        cloudfrontDomain: string
+      }
+      message: string
+      error?: string
+    }>('/setup/shared-alb/setup', { method: 'POST' }),
 }

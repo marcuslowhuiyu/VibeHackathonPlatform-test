@@ -292,10 +292,14 @@ export async function getAllRunningTasks(): Promise<RunningTaskInfo[]> {
   const ec2Client = getEC2Client();
   const config = getAllConfig();
   const clusterName = config.cluster_name || 'vibe-cluster';
+  // Get the task definition family for coding labs (to filter out dashboard tasks)
+  const codingLabTaskDef = config.task_definition || 'vibe-coding-lab';
 
   const listResponse = await client.send(
     new ListTasksCommand({
       cluster: clusterName,
+      // Filter by the coding lab task definition family
+      family: codingLabTaskDef,
     })
   );
 
@@ -315,6 +319,14 @@ export async function getAllRunningTasks(): Promise<RunningTaskInfo[]> {
 
   for (const task of describeResponse.tasks || []) {
     const taskId = task.taskArn?.split('/').pop() || '';
+    const taskDefName = task.taskDefinitionArn?.split('/').pop() || '';
+
+    // Double-check: only include tasks from the coding lab task definition family
+    // This filters out dashboard tasks and other services
+    if (!taskDefName.startsWith(codingLabTaskDef)) {
+      continue;
+    }
+
     const eniAttachment = task.attachments?.find(a => a.type === 'ElasticNetworkInterface');
     const eniId = eniAttachment?.details?.find(d => d.name === 'networkInterfaceId')?.value;
 
@@ -343,7 +355,7 @@ export async function getAllRunningTasks(): Promise<RunningTaskInfo[]> {
       publicIp,
       privateIp,
       startedAt: task.startedAt,
-      taskDefinition: task.taskDefinitionArn?.split('/').pop(),
+      taskDefinition: taskDefName,
     });
   }
 

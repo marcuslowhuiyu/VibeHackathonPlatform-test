@@ -117,6 +117,51 @@ const CLOUDWATCH_LOGS_POLICY = JSON.stringify({
   }],
 });
 
+// ELB permissions for creating/managing shared ALB
+const ELB_POLICY = JSON.stringify({
+  Version: '2012-10-17',
+  Statement: [{
+    Effect: 'Allow',
+    Action: [
+      'elasticloadbalancing:CreateLoadBalancer',
+      'elasticloadbalancing:CreateTargetGroup',
+      'elasticloadbalancing:CreateListener',
+      'elasticloadbalancing:CreateRule',
+      'elasticloadbalancing:DeleteLoadBalancer',
+      'elasticloadbalancing:DeleteTargetGroup',
+      'elasticloadbalancing:DeleteListener',
+      'elasticloadbalancing:DeleteRule',
+      'elasticloadbalancing:RegisterTargets',
+      'elasticloadbalancing:DeregisterTargets',
+      'elasticloadbalancing:DescribeLoadBalancers',
+      'elasticloadbalancing:DescribeTargetGroups',
+      'elasticloadbalancing:DescribeListeners',
+      'elasticloadbalancing:DescribeRules',
+      'elasticloadbalancing:DescribeTags',
+      'elasticloadbalancing:ModifyTargetGroupAttributes',
+      'elasticloadbalancing:AddTags',
+    ],
+    Resource: '*',
+  }],
+});
+
+// CloudFront permissions for creating/managing shared distribution
+const CLOUDFRONT_POLICY = JSON.stringify({
+  Version: '2012-10-17',
+  Statement: [{
+    Effect: 'Allow',
+    Action: [
+      'cloudfront:CreateDistribution',
+      'cloudfront:GetDistribution',
+      'cloudfront:UpdateDistribution',
+      'cloudfront:DeleteDistribution',
+      'cloudfront:ListDistributions',
+      'cloudfront:TagResource',
+    ],
+    Resource: '*',
+  }],
+});
+
 const CODEBUILD_TRUST_POLICY = JSON.stringify({
   Version: '2012-10-17',
   Statement: [{
@@ -270,6 +315,29 @@ export async function runFullSetup(
         PolicyDocument: CLOUDWATCH_LOGS_POLICY,
       }));
       report({ step: 'create_execution_role', status: 'completed', message: 'Created execution role', resourceId: executionRoleArn });
+    }
+
+    // Add ELB and CloudFront permissions to the dashboard's task role (ecsTaskRole)
+    // This allows the dashboard to create/manage the shared ALB and CloudFront
+    report({ step: 'add_alb_permissions', status: 'in_progress', message: 'Adding ALB/CloudFront permissions to dashboard role...' });
+    try {
+      // Add ELB permissions
+      await clients.iam.send(new PutRolePolicyCommand({
+        RoleName: 'ecsTaskRole',
+        PolicyName: 'ELBAccess',
+        PolicyDocument: ELB_POLICY,
+      }));
+      // Add CloudFront permissions
+      await clients.iam.send(new PutRolePolicyCommand({
+        RoleName: 'ecsTaskRole',
+        PolicyName: 'CloudFrontAccess',
+        PolicyDocument: CLOUDFRONT_POLICY,
+      }));
+      report({ step: 'add_alb_permissions', status: 'completed', message: 'Added ALB/CloudFront permissions to ecsTaskRole' });
+    } catch (permErr: any) {
+      // Role might not exist yet if this is first setup, or permissions might already be there
+      console.log('Note: Could not add ALB/CloudFront permissions to ecsTaskRole:', permErr.message);
+      report({ step: 'add_alb_permissions', status: 'skipped', message: 'Could not add permissions (role may not exist or already configured)' });
     }
 
     // Step 5: Create task role

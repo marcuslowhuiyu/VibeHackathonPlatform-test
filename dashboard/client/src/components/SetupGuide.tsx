@@ -38,6 +38,7 @@ const STEP_LABELS: Record<string, { label: string; icon: React.ReactNode }> = {
   get_subnets: { label: 'Find Subnets', icon: <Server className="w-4 h-4" /> },
   create_security_group: { label: 'Create Security Group', icon: <Shield className="w-4 h-4" /> },
   create_execution_role: { label: 'Create ECS Execution Role', icon: <Shield className="w-4 h-4" /> },
+  add_alb_permissions: { label: 'Add ALB/CloudFront Permissions', icon: <Shield className="w-4 h-4" /> },
   create_task_role: { label: 'Create Task Role (Bedrock)', icon: <Shield className="w-4 h-4" /> },
   create_ecr_repo: { label: 'Create ECR Repository', icon: <Database className="w-4 h-4" /> },
   create_cluster: { label: 'Create ECS Cluster', icon: <Box className="w-4 h-4" /> },

@@ -650,7 +650,7 @@ export default function InstanceList({ instances }: InstanceListProps) {
                               <>
                                 <Globe className="w-3 h-3 text-yellow-400 animate-pulse" />
                                 <span className="text-yellow-400 text-xs">
-                                  Deploying ({instance.cloudfront_status})
+                                  Deploying ({instance.cloudfront_status?.replace(/([a-z])([A-Z])/g, '$1 $2') || 'In Progress'})
                                 </span>
                               </>
                             )}

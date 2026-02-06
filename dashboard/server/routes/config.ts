@@ -20,6 +20,7 @@ router.put('/', (req, res) => {
     'alb_arn',
     'listener_arn',
     'ai_extension',
+    'ecr_repository',
   ];
 
   const updates: Record<string, string> = {};

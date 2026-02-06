@@ -32,7 +32,6 @@ export interface AuthConfig {
 
 interface Database {
   instances: Instance[];
-  credentials: Credentials | null;
   config: Record<string, string>;
   participants: Participant[];
   auth: AuthConfig;
@@ -57,7 +56,6 @@ function loadDb(): Database {
   }
   return {
     instances: [],
-    credentials: null,
     config: {
       cluster_name: 'vibe-cluster',
       task_definition: 'vibe-coding-lab',
@@ -67,6 +65,7 @@ function loadDb(): Database {
       alb_arn: '',
       listener_arn: '',
       ai_extension: 'continue',
+      ecr_repository: '',
     },
     participants: [],
     auth: generateDefaultAuth(),
@@ -87,7 +86,6 @@ export function initDatabase(): void {
   if (!fs.existsSync(dbPath)) {
     const initialDb: Database = {
       instances: [],
-      credentials: null,
       config: {
         cluster_name: 'vibe-cluster',
         task_definition: 'vibe-coding-lab',
@@ -97,6 +95,7 @@ export function initDatabase(): void {
         alb_arn: '',
         listener_arn: '',
         ai_extension: 'continue',
+        ecr_repository: '',
       },
       participants: [],
       auth: generateDefaultAuth(),
@@ -195,30 +194,6 @@ export function updateInstance(id: string, updates: Partial<Instance>): void {
 export function deleteInstance(id: string): void {
   const db = loadDb();
   db.instances = db.instances.filter((i) => i.id !== id);
-  saveDb(db);
-}
-
-// Credentials operations
-export interface Credentials {
-  access_key_id: string;
-  secret_access_key: string;
-  region: string;
-}
-
-export function getCredentials(): Credentials | undefined {
-  const db = loadDb();
-  return db.credentials || undefined;
-}
-
-export function saveCredentials(creds: Credentials): void {
-  const db = loadDb();
-  db.credentials = creds;
-  saveDb(db);
-}
-
-export function deleteCredentials(): void {
-  const db = loadDb();
-  db.credentials = null;
   saveDb(db);
 }
 

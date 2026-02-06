@@ -257,6 +257,119 @@ EOF
 aws ecs register-task-definition --cli-input-json file://task-definition.json
 ```
 
+## Step 9: Create CodeBuild Project (for Docker Image Building)
+
+The dashboard can build Docker images via AWS CodeBuild. This requires a service role and project.
+
+### 9a. Create CodeBuild Service Role
+
+```bash
+# Create trust policy
+cat > codebuild-trust-policy.json << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "codebuild.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+
+# Create the role
+aws iam create-role \
+    --role-name codebuild-vibe-service-role \
+    --assume-role-policy-document file://codebuild-trust-policy.json
+
+# Create permissions policy
+cat > codebuild-policy.json << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["ecr:GetAuthorizationToken"],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:PutImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload"
+      ],
+      "Resource": "arn:aws:ecr:*:*:repository/vibe-coding-lab"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:log-group:/aws/codebuild/*"
+    }
+  ]
+}
+EOF
+
+# Attach the policy
+aws iam put-role-policy \
+    --role-name codebuild-vibe-service-role \
+    --policy-name CodeBuildPermissions \
+    --policy-document file://codebuild-policy.json
+```
+
+### 9b. Create CodeBuild Project (via Console)
+
+1. Go to **CodeBuild** → **Create build project**
+
+2. **Project configuration**:
+   - **Project name**: `vibe-coding-lab-builder`
+
+3. **Source** (IMPORTANT):
+   - **Source provider**: GitHub
+   - Click **Connect to GitHub** if not already connected
+   - **Repository**: Select "Repository in my GitHub account"
+   - **GitHub repository**: Select your fork of `VibeHackathonPlatform`
+   - **Source version**: Leave blank (uses default branch)
+
+4. **Environment**:
+   - **Environment image**: Managed image
+   - **Operating system**: Ubuntu
+   - **Runtime**: Standard
+   - **Image**: `aws/codebuild/standard:7.0`
+   - **Privileged**: ✅ **MUST BE ENABLED** (required for Docker builds)
+   - **Service role**: Existing service role → `codebuild-vibe-service-role`
+
+5. **Buildspec**:
+   - Select "Use a buildspec file"
+   - Leave buildspec name blank (uses buildspec.yml from repo, or inline in project)
+
+6. **Artifacts**: No artifacts
+
+7. Click **Create build project**
+
+### 9c. Add Environment Variables
+
+After creating the project, add these environment variables:
+
+1. Go to **CodeBuild** → `vibe-coding-lab-builder` → **Edit** → **Environment**
+2. Under **Additional configuration** → **Environment variables**, add:
+   - `AWS_ACCOUNT_ID`: Your AWS account ID (e.g., `902707424595`)
+   - `AWS_DEFAULT_REGION`: Your region (e.g., `ap-southeast-1`)
+3. Click **Update environment**
+
+> **Note**: The dashboard's automated setup can create this project for you if the service role exists, but you must manually connect the GitHub source.
+
 ## Outputs to Save
 
 After completing setup, save these values for the dashboard configuration:

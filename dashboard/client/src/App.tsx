@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { QueryClient, QueryClientProvider, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Settings, Server, RefreshCw, Wrench, Users, LogOut } from 'lucide-react'
-import CredentialsForm from './components/CredentialsForm'
 import ConfigForm from './components/ConfigForm'
 import InstanceList from './components/InstanceList'
 import SpinUpForm from './components/SpinUpForm'
@@ -37,21 +36,14 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
   const [activeTab, setActiveTab] = useState<Tab>('instances')
   const queryClientInner = useQueryClient()
 
-  const { data: credentials } = useQuery({
-    queryKey: ['credentials'],
-    queryFn: api.getCredentials,
-  })
-
   const { data: instances = [], isLoading: instancesLoading } = useQuery({
     queryKey: ['instances'],
     queryFn: api.getInstances,
-    enabled: credentials?.configured,
   })
 
   const { data: setupStatus } = useQuery({
     queryKey: ['setup-status'],
     queryFn: api.getSetupStatus,
-    enabled: credentials?.configured,
     refetchInterval: 30000,
   })
 
@@ -68,8 +60,6 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
       queryClientInner.invalidateQueries({ queryKey: ['participants'] })
     },
   })
-
-  const isConfigured = credentials?.configured
 
   return (
     <div className="min-h-screen">
@@ -149,7 +139,6 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
         <div className={activeTab === 'settings' ? '' : 'hidden'}>
           <div className="space-y-8">
             <AdminPasswordForm />
-            <CredentialsForm />
             <ConfigForm />
           </div>
         </div>
@@ -161,86 +150,50 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
 
         {/* Setup Tab */}
         <div className={activeTab === 'setup' ? '' : 'hidden'}>
-          {!isConfigured ? (
-            <div className="bg-yellow-900/50 border border-yellow-600 rounded-lg p-6 text-center">
-              <h2 className="text-xl font-semibold text-yellow-200 mb-2">
-                AWS Credentials Required
-              </h2>
-              <p className="text-yellow-300 mb-4">
-                Please configure your AWS credentials in Settings first before running setup.
-              </p>
-              <button
-                onClick={() => setActiveTab('settings')}
-                className="bg-yellow-600 hover:bg-yellow-500 text-white px-4 py-2 rounded-lg"
-              >
-                Go to Settings
-              </button>
-            </div>
-          ) : (
-            <SetupGuide />
-          )}
+          <SetupGuide />
         </div>
 
         {/* Instances Tab */}
         <div className={activeTab === 'instances' ? '' : 'hidden'}>
           <div className="space-y-6">
-            {!isConfigured ? (
-              <div className="bg-yellow-900/50 border border-yellow-600 rounded-lg p-6 text-center">
-                <h2 className="text-xl font-semibold text-yellow-200 mb-2">
-                  AWS Credentials Required
+            {/* Spin Up Form */}
+            <SpinUpForm
+              onSpinUp={(count, extension, autoAssignParticipants) => spinUpMutation.mutate({ count, extension, autoAssignParticipants })}
+              isLoading={spinUpMutation.isPending}
+              setupStatus={setupStatus}
+              onGoToSetup={() => setActiveTab('setup')}
+              unassignedParticipants={participantsData?.stats?.unassigned || 0}
+            />
+
+            {/* Instance List */}
+            <div className="bg-gray-800 rounded-lg p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-semibold flex items-center gap-2">
+                  <Server className="w-5 h-5" />
+                  Instances ({instances.length})
                 </h2>
-                <p className="text-yellow-300 mb-4">
-                  Please configure your AWS credentials in Settings to manage instances.
-                </p>
                 <button
-                  onClick={() => setActiveTab('settings')}
-                  className="bg-yellow-600 hover:bg-yellow-500 text-white px-4 py-2 rounded-lg"
+                  onClick={() => queryClientInner.invalidateQueries({ queryKey: ['instances'] })}
+                  className="text-gray-400 hover:text-white p-2 rounded-lg hover:bg-gray-700"
+                  title="Refresh"
                 >
-                  Go to Settings
+                  <RefreshCw className={`w-5 h-5 ${instancesLoading ? 'animate-spin' : ''}`} />
                 </button>
               </div>
-            ) : (
-              <>
-                {/* Spin Up Form */}
-                <SpinUpForm
-                  onSpinUp={(count, extension, autoAssignParticipants) => spinUpMutation.mutate({ count, extension, autoAssignParticipants })}
-                  isLoading={spinUpMutation.isPending}
-                  setupStatus={setupStatus}
-                  onGoToSetup={() => setActiveTab('setup')}
-                  unassignedParticipants={participantsData?.stats?.unassigned || 0}
-                />
 
-                {/* Instance List */}
-                <div className="bg-gray-800 rounded-lg p-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-xl font-semibold flex items-center gap-2">
-                      <Server className="w-5 h-5" />
-                      Instances ({instances.length})
-                    </h2>
-                    <button
-                      onClick={() => queryClientInner.invalidateQueries({ queryKey: ['instances'] })}
-                      className="text-gray-400 hover:text-white p-2 rounded-lg hover:bg-gray-700"
-                      title="Refresh"
-                    >
-                      <RefreshCw className={`w-5 h-5 ${instancesLoading ? 'animate-spin' : ''}`} />
-                    </button>
-                  </div>
-
-                  {instances.length === 0 ? (
-                    <div className="text-center py-12 text-gray-400">
-                      <Server className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                      <p>No instances running</p>
-                      <p className="text-sm mt-1">Use the form above to spin up new instances</p>
-                    </div>
-                  ) : (
-                    <InstanceList instances={instances} />
-                  )}
+              {instances.length === 0 ? (
+                <div className="text-center py-12 text-gray-400">
+                  <Server className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                  <p>No instances running</p>
+                  <p className="text-sm mt-1">Use the form above to spin up new instances</p>
                 </div>
+              ) : (
+                <InstanceList instances={instances} />
+              )}
+            </div>
 
-                {/* Orphaned Instance Scanner */}
-                <OrphanedInstanceScanner />
-              </>
-            )}
+            {/* Orphaned Instance Scanner */}
+            <OrphanedInstanceScanner />
           </div>
         </div>
       </main>

@@ -5,21 +5,12 @@ import {
   BatchGetProjectsCommand,
   CreateProjectCommand,
 } from '@aws-sdk/client-codebuild';
-import { getCredentials } from '../db/database.js';
+
+// Use default credentials from ECS task role
+const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-southeast-1';
 
 function getClient(): CodeBuildClient {
-  const creds = getCredentials();
-  if (!creds) {
-    throw new Error('AWS credentials not configured');
-  }
-
-  return new CodeBuildClient({
-    region: creds.region,
-    credentials: {
-      accessKeyId: creds.access_key_id,
-      secretAccessKey: creds.secret_access_key,
-    },
-  });
+  return new CodeBuildClient({ region: AWS_REGION });
 }
 
 const PROJECT_NAME = 'vibe-coding-lab-builder';
@@ -55,10 +46,8 @@ export async function createProject(
   githubRepo: string
 ): Promise<void> {
   const client = getClient();
-  const creds = getCredentials();
-  if (!creds) throw new Error('AWS credentials not configured');
 
-  // Create the buildspec inline
+  // Create the buildspec inline - builds both Continue and Cline extensions
   const buildspec = `version: 0.2
 phases:
   pre_build:
@@ -67,15 +56,22 @@ phases:
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
   build:
     commands:
-      - echo Building the Docker image...
+      - echo "=== Building Continue extension from cline-setup/ ==="
       - cd cline-setup
-      - docker build --build-arg AI_EXTENSION=continue -t vibe-coding-lab:continue .
+      - docker build -t vibe-coding-lab:continue .
       - docker tag vibe-coding-lab:continue $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
       - docker tag vibe-coding-lab:continue $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
+      - cd ..
+      - echo "=== Building Cline extension from cline-ai/ ==="
+      - cd cline-ai
+      - docker build -t vibe-coding-lab:cline .
+      - docker tag vibe-coding-lab:cline $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
+      - cd ..
   post_build:
     commands:
-      - echo Pushing the Docker image...
+      - echo Pushing the Docker images...
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
       - echo Build completed on \`date\`
 `;
@@ -95,7 +91,7 @@ phases:
       environment: {
         type: 'LINUX_CONTAINER',
         computeType: 'BUILD_GENERAL1_MEDIUM',
-        image: 'aws/codebuild/amazonlinux2-x86_64-standard:5.0',
+        image: 'aws/codebuild/standard:7.0', // Ubuntu - works in all regions
         privilegedMode: true, // Required for Docker builds
         environmentVariables: [
           {
@@ -104,7 +100,7 @@ phases:
           },
           {
             name: 'AWS_DEFAULT_REGION',
-            value: creds.region,
+            value: AWS_REGION,
           },
         ],
       },

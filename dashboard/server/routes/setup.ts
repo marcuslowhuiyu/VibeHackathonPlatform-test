@@ -120,7 +120,7 @@ router.post('/build-and-push', async (req, res) => {
 });
 
 // Build and push Docker image with SSE streaming progress
-// Only builds Continue extension
+// Supports both Continue and Cline extensions via ?extensions=continue,cline query param
 router.get('/build-and-push-stream', async (req, res) => {
   // Set up SSE headers
   res.setHeader('Content-Type', 'text/event-stream');
@@ -133,8 +133,26 @@ router.get('/build-and-push-stream', async (req, res) => {
   };
 
   try {
-    // Only build Continue extension
-    const extensions: ('continue')[] = ['continue'];
+    // Parse extensions from query param, default to 'continue' for backwards compatibility
+    const extensionsParam = req.query.extensions as string | undefined;
+    const validExtensions = ['continue', 'cline'] as const;
+    type AIExtension = typeof validExtensions[number];
+
+    let extensions: AIExtension[];
+    if (extensionsParam) {
+      extensions = extensionsParam
+        .split(',')
+        .map((e) => e.trim().toLowerCase())
+        .filter((e): e is AIExtension => validExtensions.includes(e as AIExtension));
+    } else {
+      extensions = ['continue'];
+    }
+
+    if (extensions.length === 0) {
+      sendEvent({ type: 'error', error: 'No valid extensions specified' });
+      res.end();
+      return;
+    }
 
     const result = await buildAndPushImage((progress) => {
       sendEvent({ type: 'progress', ...progress });
@@ -214,19 +232,10 @@ router.put('/files/:filename', (req, res) => {
 router.post('/test-cloudfront', async (req, res) => {
   try {
     const { CloudFrontClient, ListDistributionsCommand } = await import('@aws-sdk/client-cloudfront');
-    const { getCredentials } = await import('../db/database.js');
 
-    const creds = getCredentials();
-    if (!creds) {
-      return res.status(400).json({ error: 'No credentials configured' });
-    }
-
+    // Use default credentials from ECS task role
     const client = new CloudFrontClient({
       region: 'us-east-1',
-      credentials: {
-        accessKeyId: creds.access_key_id,
-        secretAccessKey: creds.secret_access_key,
-      },
     });
 
     // Test basic CloudFront access

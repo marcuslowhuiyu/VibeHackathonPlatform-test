@@ -2,7 +2,7 @@
 FROM gitpod/openvscode-server:latest
 
 # Build arguments for customization
-ARG CLINE_VERSION=3.56.2
+ARG CLINE_VERSION=3.57.1
 
 # Switch to root to perform system installations
 USER root

@@ -5,6 +5,8 @@ import {
   DescribeTasksCommand,
   ListTasksCommand,
   ListClustersCommand,
+  RegisterTaskDefinitionCommand,
+  DescribeTaskDefinitionCommand,
 } from '@aws-sdk/client-ecs';
 import {
   EC2Client,
@@ -80,9 +82,10 @@ export async function runTask(instanceId: string, extension: string = 'continue'
   const config = getAllConfig();
 
   const clusterName = config.cluster_name || 'vibe-cluster';
-  const taskDefinition = config.task_definition || 'vibe-coding-lab';
+  const baseTaskDefinition = config.task_definition || 'vibe-coding-lab';
   const subnetIds = config.subnet_ids?.split(',').filter(Boolean) || [];
   const securityGroupId = config.security_group_id;
+  const ecrRepository = config.ecr_repository;
 
   if (subnetIds.length === 0) {
     throw new Error('Subnet IDs not configured. Please run automated setup first.');
@@ -92,10 +95,86 @@ export async function runTask(instanceId: string, extension: string = 'continue'
     throw new Error('Security group ID not configured. Please run automated setup first.');
   }
 
+  // Get the base task definition to copy its configuration
+  const describeResponse = await client.send(
+    new DescribeTaskDefinitionCommand({
+      taskDefinition: baseTaskDefinition,
+    })
+  );
+
+  const baseDef = describeResponse.taskDefinition;
+  if (!baseDef) {
+    throw new Error(`Task definition ${baseTaskDefinition} not found`);
+  }
+
+  // Determine the image tag based on extension
+  const imageTag = extension === 'cline' ? 'cline' : 'continue';
+
+  // Build the new image URI
+  let imageUri: string;
+  if (ecrRepository) {
+    // Use configured ECR repository with the appropriate tag
+    imageUri = `${ecrRepository}:${imageTag}`;
+  } else {
+    // Try to extract from the base task definition and modify the tag
+    const baseImage = baseDef.containerDefinitions?.[0]?.image;
+    if (baseImage) {
+      // Replace the tag in the image URI
+      const imageWithoutTag = baseImage.replace(/:[\w.-]+$/, '');
+      imageUri = `${imageWithoutTag}:${imageTag}`;
+    } else {
+      throw new Error('Cannot determine image URI. Please configure ECR repository.');
+    }
+  }
+
+  console.log(`Starting task with image: ${imageUri} for extension: ${extension}`);
+
+  // Register a new task definition revision with the correct image
+  const containerDef = baseDef.containerDefinitions?.[0];
+  if (!containerDef) {
+    throw new Error('No container definition found in base task definition');
+  }
+
+  const registerResponse = await client.send(
+    new RegisterTaskDefinitionCommand({
+      family: baseTaskDefinition,
+      taskRoleArn: baseDef.taskRoleArn,
+      executionRoleArn: baseDef.executionRoleArn,
+      networkMode: baseDef.networkMode,
+      requiresCompatibilities: baseDef.requiresCompatibilities,
+      cpu: baseDef.cpu,
+      memory: baseDef.memory,
+      runtimePlatform: baseDef.runtimePlatform,
+      containerDefinitions: [
+        {
+          ...containerDef,
+          image: imageUri,
+          environment: [
+            ...(containerDef.environment || []).filter(
+              e => e.name !== 'INSTANCE_ID' && e.name !== 'AWS_REGION' && e.name !== 'AI_EXTENSION'
+            ),
+            { name: 'INSTANCE_ID', value: instanceId },
+            { name: 'AWS_REGION', value: AWS_REGION },
+            { name: 'AI_EXTENSION', value: extension },
+          ],
+        },
+      ],
+      volumes: baseDef.volumes,
+    })
+  );
+
+  const newTaskDefArn = registerResponse.taskDefinition?.taskDefinitionArn;
+  if (!newTaskDefArn) {
+    throw new Error('Failed to register task definition');
+  }
+
+  console.log(`Registered task definition: ${newTaskDefArn}`);
+
+  // Run the task with the new task definition
   const response = await client.send(
     new RunTaskCommand({
       cluster: clusterName,
-      taskDefinition: taskDefinition,
+      taskDefinition: newTaskDefArn,
       launchType: 'FARGATE',
       networkConfiguration: {
         awsvpcConfiguration: {
@@ -103,18 +182,6 @@ export async function runTask(instanceId: string, extension: string = 'continue'
           securityGroups: [securityGroupId],
           assignPublicIp: 'ENABLED',
         },
-      },
-      overrides: {
-        containerOverrides: [
-          {
-            name: 'vibe-container',
-            environment: [
-              { name: 'INSTANCE_ID', value: instanceId },
-              { name: 'AWS_REGION', value: AWS_REGION },
-              { name: 'AI_EXTENSION', value: extension },
-            ],
-          },
-        ],
       },
     })
   );

@@ -159,7 +159,7 @@ export default function SpinUpForm({ onSpinUp, isLoading, setupStatus, onGoToSet
             <div className="text-green-300 text-sm mt-1">
               <span className="text-gray-400">Image:</span>{' '}
               <code className="bg-gray-900/50 px-2 py-0.5 rounded text-xs break-all">
-                {setupStatus.imageUri}
+                {setupStatus.imageUri}:<span className={AI_EXTENSIONS[selectedExtension].color}>{selectedExtension}</span>
               </code>
             </div>
           </div>

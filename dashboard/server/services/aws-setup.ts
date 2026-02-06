@@ -65,6 +65,7 @@ export interface SetupResult {
     vpc_id: string;
     subnet_ids: string;
     security_group_id: string;
+    ecr_repository: string;
   };
   error?: string;
 }
@@ -493,6 +494,7 @@ phases:
       vpc_id: vpcId,
       subnet_ids: subnetIds,
       security_group_id: securityGroupId,
+      ecr_repository: ecrRepoUri,
     };
 
     setConfig('cluster_name', config.cluster_name);
@@ -500,6 +502,7 @@ phases:
     setConfig('vpc_id', config.vpc_id);
     setConfig('subnet_ids', config.subnet_ids);
     setConfig('security_group_id', config.security_group_id);
+    setConfig('ecr_repository', config.ecr_repository);
 
     report({ step: 'save_config', status: 'completed', message: 'Saved configuration to dashboard' });
 
@@ -538,7 +541,8 @@ export async function checkSetupStatus(): Promise<{
       const identity = await clients.sts.send(new GetCallerIdentityCommand({}));
       accountId = identity.Account || null;
       if (accountId) {
-        imageUri = `${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:latest`;
+        // Show base repository URI - actual tag depends on selected extension
+        imageUri = `${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab`;
       }
     } catch {
       return { configured: false, missing: ['AWS access (check task role)'], ecrImageExists: false, imageUri: null, availableImages: [] };

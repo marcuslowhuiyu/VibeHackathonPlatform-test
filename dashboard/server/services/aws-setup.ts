@@ -41,6 +41,7 @@ import { promisify } from 'util';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { setConfig, getConfig } from '../db/database.js';
+import { ensureCodingLabALB, ensureCodingLabCloudFront, saveCodingLabALBConfig } from './coding-lab-alb.js';
 
 const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
@@ -487,6 +488,35 @@ phases:
       report({ step: 'create_codebuild_project', status: 'completed', message: 'Created CodeBuild project', resourceId: codebuildProjectName });
     }
 
+    // Step 11: Create shared ALB for coding instances
+    report({ step: 'create_shared_alb', status: 'in_progress', message: 'Creating shared ALB for coding instances...' });
+    let albConfig;
+    try {
+      albConfig = await ensureCodingLabALB(vpcId, subnetIds.split(','), securityGroupId);
+      report({ step: 'create_shared_alb', status: 'completed', message: `ALB created: ${albConfig.albDnsName}`, resourceId: albConfig.albArn });
+    } catch (albErr: any) {
+      report({ step: 'create_shared_alb', status: 'failed', message: `Failed to create ALB: ${albErr.message}` });
+      throw new Error(`Failed to create shared ALB: ${albErr.message}`);
+    }
+
+    // Step 12: Create shared CloudFront distribution
+    report({ step: 'create_shared_cloudfront', status: 'in_progress', message: 'Creating shared CloudFront distribution...' });
+    let cfConfig;
+    try {
+      cfConfig = await ensureCodingLabCloudFront(albConfig.albDnsName);
+      report({ step: 'create_shared_cloudfront', status: 'completed', message: `CloudFront: ${cfConfig.domain}`, resourceId: cfConfig.distributionId });
+    } catch (cfErr: any) {
+      report({ step: 'create_shared_cloudfront', status: 'failed', message: `Failed to create CloudFront: ${cfErr.message}` });
+      throw new Error(`Failed to create shared CloudFront: ${cfErr.message}`);
+    }
+
+    // Save ALB/CloudFront config
+    saveCodingLabALBConfig({
+      ...albConfig,
+      cloudfrontDistributionId: cfConfig.distributionId,
+      cloudfrontDomain: cfConfig.domain,
+    });
+
     // Save config
     const config = {
       cluster_name: clusterName,
@@ -526,11 +556,15 @@ export async function checkSetupStatus(): Promise<{
   ecrImageExists: boolean;
   imageUri: string | null;
   availableImages: AIExtension[];
+  sharedAlbConfigured: boolean;
+  cloudfrontDomain: string | null;
 }> {
   const missing: string[] = [];
   let ecrImageExists = false;
   let imageUri: string | null = null;
   const availableImages: AIExtension[] = [];
+  let sharedAlbConfigured = false;
+  let cloudfrontDomain: string | null = null;
 
   try {
     const clients = getClients();
@@ -640,9 +674,20 @@ export async function checkSetupStatus(): Promise<{
       missing.push('CodeBuild project');
     }
 
-    return { configured: missing.length === 0, missing, ecrImageExists, imageUri, availableImages };
+    // Check shared ALB/CloudFront configuration
+    const albArn = getConfig('coding_lab_alb_arn');
+    const listenerArn = getConfig('coding_lab_listener_arn');
+    cloudfrontDomain = getConfig('coding_lab_cloudfront_domain') || null;
+
+    if (albArn && listenerArn && cloudfrontDomain) {
+      sharedAlbConfigured = true;
+    } else {
+      missing.push('Shared ALB/CloudFront');
+    }
+
+    return { configured: missing.length === 0, missing, ecrImageExists, imageUri, availableImages, sharedAlbConfigured, cloudfrontDomain };
   } catch (err: any) {
-    return { configured: false, missing: ['Unable to check: ' + err.message], ecrImageExists: false, imageUri: null, availableImages: [] };
+    return { configured: false, missing: ['Unable to check: ' + err.message], ecrImageExists: false, imageUri: null, availableImages: [], sharedAlbConfigured: false, cloudfrontDomain: null };
   }
 }
 

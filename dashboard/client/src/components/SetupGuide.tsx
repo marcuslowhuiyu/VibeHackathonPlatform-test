@@ -44,6 +44,8 @@ const STEP_LABELS: Record<string, { label: string; icon: React.ReactNode }> = {
   register_task_definition: { label: 'Register Task Definition', icon: <Box className="w-4 h-4" /> },
   create_codebuild_role: { label: 'Create CodeBuild Role', icon: <Shield className="w-4 h-4" /> },
   create_codebuild_project: { label: 'Create CodeBuild Project', icon: <Terminal className="w-4 h-4" /> },
+  create_shared_alb: { label: 'Create Shared ALB', icon: <Globe className="w-4 h-4" /> },
+  create_shared_cloudfront: { label: 'Create Shared CloudFront', icon: <Globe className="w-4 h-4" /> },
   save_config: { label: 'Save Configuration', icon: <CheckCircle className="w-4 h-4" /> },
 }
 
@@ -746,172 +748,6 @@ function CodeBuildSection() {
   )
 }
 
-// Shared ALB/CloudFront Section
-function SharedALBSection() {
-  const [isSettingUp, setIsSettingUp] = useState(false)
-  const [setupResult, setSetupResult] = useState<{
-    success: boolean
-    message: string
-    config?: {
-      albArn: string
-      albDnsName: string
-      listenerArn: string
-      cloudfrontDistributionId: string
-      cloudfrontDomain: string
-    }
-    error?: string
-  } | null>(null)
-  const queryClient = useQueryClient()
-
-  const { data: albStatus, isLoading } = useQuery({
-    queryKey: ['shared-alb-status'],
-    queryFn: api.getSharedALBStatus,
-  })
-
-  const handleSetup = async () => {
-    setIsSettingUp(true)
-    setSetupResult(null)
-    try {
-      const result = await api.setupSharedALB()
-      setSetupResult(result)
-      queryClient.invalidateQueries({ queryKey: ['shared-alb-status'] })
-    } catch (err: any) {
-      setSetupResult({ success: false, message: '', error: err.message })
-    }
-    setIsSettingUp(false)
-  }
-
-  return (
-    <div className="space-y-4">
-      <p className="text-gray-400 text-sm">
-        Set up a shared Application Load Balancer (ALB) and CloudFront distribution for all coding instances.
-        This provides faster instance startup compared to per-instance CloudFront distributions.
-      </p>
-
-      {/* Current Status */}
-      {isLoading ? (
-        <div className="flex items-center gap-2 text-gray-400">
-          <Loader2 className="w-4 h-4 animate-spin" />
-          Checking status...
-        </div>
-      ) : albStatus?.configured ? (
-        <div className="space-y-3">
-          <div className="bg-green-900/30 border border-green-600 rounded-lg p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <CheckCircle className="w-5 h-5 text-green-400" />
-              <span className="font-medium text-green-400">Shared ALB/CloudFront Configured</span>
-            </div>
-            <p className="text-sm text-gray-400 mb-3">
-              New instances will use path-based routing for faster startup.
-            </p>
-            <div className="grid gap-2 text-sm">
-              {albStatus.cloudfrontDomain && (
-                <div className="flex items-center gap-2">
-                  <Globe className="w-4 h-4 text-blue-400" />
-                  <span className="text-gray-400">CloudFront:</span>
-                  <code className="text-blue-300 bg-gray-800 px-2 py-0.5 rounded">
-                    https://{albStatus.cloudfrontDomain}
-                  </code>
-                </div>
-              )}
-              {albStatus.albDnsName && (
-                <div className="flex items-center gap-2">
-                  <Server className="w-4 h-4 text-orange-400" />
-                  <span className="text-gray-400">ALB:</span>
-                  <code className="text-orange-300 bg-gray-800 px-2 py-0.5 rounded text-xs">
-                    {albStatus.albDnsName}
-                  </code>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="bg-yellow-900/30 border border-yellow-600 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle className="w-5 h-5 text-yellow-400" />
-            <span className="font-medium text-yellow-400">Not Configured</span>
-          </div>
-          <p className="text-sm text-gray-400">
-            Click the button below to set up the shared ALB and CloudFront.
-            Instances are currently using per-instance CloudFront which is slower to provision.
-          </p>
-        </div>
-      )}
-
-      {/* Setup Button */}
-      {!albStatus?.configured && (
-        <button
-          onClick={handleSetup}
-          disabled={isSettingUp}
-          className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 rounded-lg flex items-center gap-2 font-medium"
-        >
-          {isSettingUp ? (
-            <>
-              <Loader2 className="w-5 h-5 animate-spin" />
-              Setting up...
-            </>
-          ) : (
-            <>
-              <Play className="w-5 h-5" />
-              Setup Shared ALB & CloudFront
-            </>
-          )}
-        </button>
-      )}
-
-      {/* Setup Result */}
-      {setupResult && (
-        <div
-          className={`p-4 rounded-lg border ${
-            setupResult.success
-              ? 'bg-green-900/30 border-green-600'
-              : 'bg-red-900/30 border-red-600'
-          }`}
-        >
-          {setupResult.success ? (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <CheckCircle className="w-5 h-5 text-green-400" />
-                <span className="text-green-400 font-medium">Setup Complete!</span>
-              </div>
-              <p className="text-sm text-gray-400">{setupResult.message}</p>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <XCircle className="w-5 h-5 text-red-400" />
-              <span className="text-red-400">{setupResult.error}</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Benefits */}
-      <div className="bg-gray-700/30 rounded-lg p-4">
-        <h4 className="font-medium text-gray-300 mb-2">Benefits of Shared ALB/CloudFront:</h4>
-        <ul className="space-y-1 text-sm text-gray-400">
-          <li className="flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-green-400" />
-            Faster instance startup (no CloudFront provisioning delay)
-          </li>
-          <li className="flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-green-400" />
-            Lower AWS costs (single CloudFront distribution)
-          </li>
-          <li className="flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-green-400" />
-            Consistent HTTPS URLs for all instances
-          </li>
-          <li className="flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-green-400" />
-            Path-based routing: /i/&#123;instance-id&#125;/
-          </li>
-        </ul>
-      </div>
-    </div>
-  )
-}
-
 export default function SetupGuide() {
   const queryClient = useQueryClient()
   const [setupSteps, setSetupSteps] = useState<SetupStep[]>([])
@@ -1051,7 +887,7 @@ export default function SetupGuide() {
             Checking setup status...
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div
               className={`p-4 rounded-lg border ${
                 status?.configured
@@ -1070,7 +906,29 @@ export default function SetupGuide() {
               <p className="text-sm text-gray-400">
                 {status?.configured
                   ? 'All resources configured'
-                  : `Missing: ${status?.missing?.join(', ') || 'Unknown'}`}
+                  : `Missing: ${status?.missing?.filter(m => m !== 'Shared ALB/CloudFront').join(', ') || 'Unknown'}`}
+              </p>
+            </div>
+
+            <div
+              className={`p-4 rounded-lg border ${
+                status?.sharedAlbConfigured
+                  ? 'bg-green-900/20 border-green-600'
+                  : 'bg-yellow-900/20 border-yellow-600'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                {status?.sharedAlbConfigured ? (
+                  <CheckCircle className="w-5 h-5 text-green-400" />
+                ) : (
+                  <AlertTriangle className="w-5 h-5 text-yellow-400" />
+                )}
+                <span className="font-medium">ALB & CloudFront</span>
+              </div>
+              <p className="text-sm text-gray-400">
+                {status?.sharedAlbConfigured
+                  ? 'Shared routing configured'
+                  : 'Run setup to configure'}
               </p>
             </div>
 
@@ -1099,14 +957,27 @@ export default function SetupGuide() {
         )}
 
         {allConfigured && (
-          <div className="mt-4 bg-green-900/30 border border-green-600 rounded-lg p-4 flex items-center gap-3">
-            <CheckCircle className="w-6 h-6 text-green-400" />
-            <div>
-              <p className="text-green-400 font-medium">Setup Complete!</p>
-              <p className="text-sm text-gray-400">
-                You can now spin up instances from the Instances tab.
-              </p>
+          <div className="mt-4 bg-green-900/30 border border-green-600 rounded-lg p-4">
+            <div className="flex items-center gap-3 mb-2">
+              <CheckCircle className="w-6 h-6 text-green-400" />
+              <div>
+                <p className="text-green-400 font-medium">Setup Complete!</p>
+                <p className="text-sm text-gray-400">
+                  You can now spin up instances from the Instances tab.
+                </p>
+              </div>
             </div>
+            {status?.cloudfrontDomain && (
+              <div className="mt-3 pt-3 border-t border-green-600/30">
+                <div className="flex items-center gap-2 text-sm">
+                  <Globe className="w-4 h-4 text-blue-400" />
+                  <span className="text-gray-400">Instances URL:</span>
+                  <code className="text-blue-300 bg-gray-800 px-2 py-0.5 rounded">
+                    https://{status.cloudfrontDomain}/i/&#123;instance-id&#125;/
+                  </code>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1280,20 +1151,9 @@ export default function SetupGuide() {
         </div>
       </CollapsibleSection>
 
-      {/* Step 3: Shared ALB/CloudFront Setup */}
+      {/* Step 3: Edit Container Configuration */}
       <CollapsibleSection
-        title="Step 3: Shared ALB/CloudFront (Recommended)"
-        icon={<Globe className="w-5 h-5 text-green-400" />}
-        defaultOpen={status?.configured && !status?.ecrImageExists === false}
-        badge="Recommended"
-        badgeColor="green"
-      >
-        <SharedALBSection />
-      </CollapsibleSection>
-
-      {/* Step 4: Edit Container Configuration */}
-      <CollapsibleSection
-        title="Step 4: Customize Container (Optional)"
+        title="Step 3: Customize Container (Optional)"
         icon={<FileCode className="w-5 h-5 text-cyan-400" />}
         badge="Optional"
         badgeColor="gray"

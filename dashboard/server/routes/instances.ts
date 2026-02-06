@@ -9,6 +9,7 @@ import {
   Instance,
   getUnassignedParticipants,
   assignParticipantToInstance,
+  getConfig,
 } from '../db/database.js';
 import { runTask, stopTask, getTaskStatus, getAllRunningTasks } from '../services/ecs-manager.js';
 import {
@@ -18,11 +19,103 @@ import {
   deleteDistribution,
   updateDistributionOrigin,
 } from '../services/cloudfront-manager.js';
+import {
+  getCodingLabALBConfig,
+  registerCodingInstance,
+  deregisterCodingInstance,
+  getCodingLabCloudFrontDomain,
+} from '../services/coding-lab-alb.js';
 
 const router = Router();
 
-// Helper to create CloudFront distribution for an instance
+// Check if we're using the shared ALB mode (single CloudFront for all instances)
+function isSharedALBMode(): boolean {
+  const config = getCodingLabALBConfig();
+  return !!(config?.albArn && config?.listenerArn);
+}
+
+// Helper to register instance with shared ALB (new approach - single CloudFront)
+async function ensureSharedALBRegistration(instance: Instance, publicIp: string): Promise<void> {
+  console.log(`[SharedALB] Checking instance ${instance.id}: publicIp=${publicIp}, existing_tg=${instance.alb_target_group_arn}`);
+
+  // Skip if no public IP
+  if (!publicIp) {
+    return;
+  }
+
+  // Already registered with ALB
+  if (instance.alb_target_group_arn && instance.alb_rule_arn) {
+    // Just update the public IP if changed
+    if (instance.public_ip !== publicIp) {
+      updateInstance(instance.id, { public_ip: publicIp });
+      instance.public_ip = publicIp;
+    }
+    return;
+  }
+
+  const albConfig = getCodingLabALBConfig();
+  if (!albConfig) {
+    console.log(`[SharedALB] ALB not configured, skipping registration`);
+    return;
+  }
+
+  const vpcId = getConfig('vpc_id');
+  if (!vpcId) {
+    console.log(`[SharedALB] VPC ID not configured, skipping registration`);
+    return;
+  }
+
+  try {
+    console.log(`[SharedALB] Registering instance ${instance.id} with ALB`);
+    const result = await registerCodingInstance(
+      instance.id,
+      publicIp,
+      vpcId,
+      albConfig.listenerArn
+    );
+
+    // Build the VS Code URL using the shared CloudFront domain
+    const cloudfrontDomain = getCodingLabCloudFrontDomain();
+    const vscodeUrl = cloudfrontDomain
+      ? `https://${cloudfrontDomain}${result.accessPath}/`
+      : `http://${albConfig.albDnsName}${result.accessPath}/`;
+
+    updateInstance(instance.id, {
+      alb_target_group_arn: result.targetGroupArn,
+      alb_rule_arn: result.ruleArn,
+      alb_access_path: result.accessPath,
+      public_ip: publicIp,
+      vscode_url: vscodeUrl,
+      // React app still needs direct IP access (different port)
+      app_url: `http://${publicIp}:3000`,
+    });
+
+    instance.alb_target_group_arn = result.targetGroupArn;
+    instance.alb_rule_arn = result.ruleArn;
+    instance.alb_access_path = result.accessPath;
+    instance.public_ip = publicIp;
+    instance.vscode_url = vscodeUrl;
+    instance.app_url = `http://${publicIp}:3000`;
+
+    console.log(`[SharedALB] Instance registered: ${vscodeUrl}`);
+  } catch (err: any) {
+    console.error(`[SharedALB] Error registering instance ${instance.id}:`, err.message);
+    // Fall back to direct IP access
+    updateInstance(instance.id, {
+      public_ip: publicIp,
+      vscode_url: `http://${publicIp}:8080`,
+      app_url: `http://${publicIp}:3000`,
+    });
+  }
+}
+
+// Helper to create CloudFront distribution for an instance (legacy approach - per-instance CloudFront)
 async function ensureCloudFrontDistribution(instance: Instance, publicIp: string): Promise<void> {
+  // If using shared ALB mode, use that instead
+  if (isSharedALBMode()) {
+    return ensureSharedALBRegistration(instance, publicIp);
+  }
+
   console.log(`[CloudFront] Checking instance ${instance.id}: publicIp=${publicIp}, existing_cf=${instance.cloudfront_distribution_id}`);
 
   // Skip if no public IP
@@ -84,17 +177,31 @@ async function ensureCloudFrontDistribution(instance: Instance, publicIp: string
   }
 }
 
-// Helper to clean up CloudFront distribution
+// Helper to clean up CloudFront distribution or ALB registration
 async function cleanupCloudFront(instance: Instance): Promise<void> {
-  if (!instance.cloudfront_distribution_id) return;
+  // Clean up shared ALB resources if present
+  if (instance.alb_target_group_arn || instance.alb_rule_arn) {
+    try {
+      console.log(`[SharedALB] Deregistering instance ${instance.id} from ALB`);
+      await deregisterCodingInstance(
+        instance.alb_target_group_arn || '',
+        instance.alb_rule_arn || ''
+      );
+    } catch (err: any) {
+      console.error(`[SharedALB] Error deregistering instance ${instance.id}:`, err);
+    }
+  }
 
-  try {
-    console.log(`Disabling CloudFront distribution for instance ${instance.id}`);
-    await disableDistribution(instance.cloudfront_distribution_id);
-    // Note: Full deletion happens asynchronously after distribution is deployed
-    // We could set up a background job to clean these up later
-  } catch (err: any) {
-    console.error(`Error disabling CloudFront for ${instance.id}:`, err);
+  // Clean up legacy per-instance CloudFront if present
+  if (instance.cloudfront_distribution_id) {
+    try {
+      console.log(`Disabling CloudFront distribution for instance ${instance.id}`);
+      await disableDistribution(instance.cloudfront_distribution_id);
+      // Note: Full deletion happens asynchronously after distribution is deployed
+      // We could set up a background job to clean these up later
+    } catch (err: any) {
+      console.error(`Error disabling CloudFront for ${instance.id}:`, err);
+    }
   }
 }
 

@@ -142,11 +142,15 @@ export interface Instance {
   // AI extension used for this instance
   // To add new extensions, update the type: 'continue' | 'cline' | 'roo-code'
   ai_extension?: 'continue';
-  // CloudFront fields for HTTPS access
+  // CloudFront fields for HTTPS access (legacy - per-instance CloudFront)
   cloudfront_distribution_id?: string;
   cloudfront_domain?: string;
   cloudfront_status?: string;
   public_ip?: string;
+  // Shared ALB fields (new - single CloudFront for all instances)
+  alb_target_group_arn?: string;
+  alb_rule_arn?: string;
+  alb_access_path?: string;
 }
 
 export function createInstance(id: string, aiExtension?: 'continue'): Instance {

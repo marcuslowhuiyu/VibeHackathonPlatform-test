@@ -172,12 +172,12 @@ router.post('/spin-up', async (req, res) => {
     // 1. Add to validExtensions array
     // 2. Add to extPrefixes map
     // ==========================================
-    const validExtensions = ['continue'];
-    // const validExtensions = ['continue', 'cline', 'roo-code']; // Enable when ready
+    const validExtensions = ['continue', 'cline'];
+    // const validExtensions = ['continue', 'cline', 'roo-code']; // Enable roo-code when ready
 
     const extPrefixes: Record<string, string> = {
       continue: 'ct',
-      // cline: 'cl',      // Enable when ready
+      cline: 'cl',
       // 'roo-code': 'rc', // Enable when ready
     };
 

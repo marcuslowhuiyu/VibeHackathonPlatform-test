@@ -2,19 +2,27 @@ name: Deploy to AWS
 
 on:
   push:
-    branches: [main, dev]
+    branches:
+      - main
+      - dev
+      - 'feature/**'
+      - 'bugfix/**'
+      - 'hotfix/**'
+      - 'test/**'
     paths:
       - 'dashboard/**'
       - 'cline-setup/**'
+      - 'cline-ai/**'
       - '.github/workflows/deploy-dashboard.yml'
   workflow_dispatch:
     inputs:
       environment:
         description: 'Environment to deploy'
         required: false
-        default: 'production'
+        default: 'auto'
         type: choice
         options:
+          - auto
           - production
           - staging
 
@@ -27,48 +35,90 @@ env:
   CONTAINER_NAME: vibe-dashboard
 
 jobs:
-  # Fast job: Only build what changed
   build:
     name: Build Images
     runs-on: ubuntu-latest
     outputs:
       dashboard_image: ${{ steps.build-dashboard.outputs.image }}
       environment: ${{ steps.set-env.outputs.environment }}
+      environment_name: ${{ steps.set-env.outputs.environment_name }}
       ecs_service: ${{ steps.set-env.outputs.ecs_service }}
+      task_family: ${{ steps.set-env.outputs.task_family }}
+      tg_name: ${{ steps.set-env.outputs.tg_name }}
       task_cpu: ${{ steps.set-env.outputs.task_cpu }}
       task_memory: ${{ steps.set-env.outputs.task_memory }}
+      is_feature_branch: ${{ steps.set-env.outputs.is_feature_branch }}
+      branch_slug: ${{ steps.set-env.outputs.branch_slug }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2  # Need for change detection
+          fetch-depth: 2
 
       - name: Set environment variables
         id: set-env
         run: |
-          # Determine environment from branch or manual input
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ inputs.environment }}" == "staging" ]; then
-            ENVIRONMENT="staging"
-          elif [ "${{ github.ref_name }}" == "dev" ]; then
-            ENVIRONMENT="staging"
-          else
+          BRANCH="${{ github.ref_name }}"
+
+          # Create a slug from branch name (lowercase, replace special chars, truncate)
+          # AWS target group names max 32 chars: "vibe-test-" (10) + slug (16) + "-tg" (3) = 29
+          BRANCH_SLUG=$(echo "$BRANCH" | sed 's|/|-|g' | sed 's|[^a-zA-Z0-9-]||g' | tr '[:upper:]' '[:lower:]' | cut -c1-16)
+          echo "branch_slug=$BRANCH_SLUG" >> $GITHUB_OUTPUT
+
+          # Determine environment type
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ inputs.environment }}" != "auto" ]; then
+            # Manual dispatch with explicit environment
+            if [ "${{ inputs.environment }}" == "production" ]; then
+              ENVIRONMENT="production"
+              ENVIRONMENT_NAME="production"
+            else
+              ENVIRONMENT="staging"
+              ENVIRONMENT_NAME="staging"
+            fi
+            IS_FEATURE="false"
+          elif [ "$BRANCH" == "main" ]; then
             ENVIRONMENT="production"
+            ENVIRONMENT_NAME="production"
+            IS_FEATURE="false"
+          elif [ "$BRANCH" == "dev" ]; then
+            ENVIRONMENT="staging"
+            ENVIRONMENT_NAME="staging"
+            IS_FEATURE="false"
+          else
+            # Feature/test branch - gets its own environment
+            ENVIRONMENT="test"
+            ENVIRONMENT_NAME="test-$BRANCH_SLUG"
+            IS_FEATURE="true"
           fi
 
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+          echo "environment_name=$ENVIRONMENT_NAME" >> $GITHUB_OUTPUT
+          echo "is_feature_branch=$IS_FEATURE" >> $GITHUB_OUTPUT
 
-          if [ "$ENVIRONMENT" == "staging" ]; then
+          # Set resource names and sizing based on environment
+          if [ "$ENVIRONMENT" == "production" ]; then
+            echo "ecs_service=vibe-dashboard-service" >> $GITHUB_OUTPUT
+            echo "task_family=vibe-dashboard" >> $GITHUB_OUTPUT
+            echo "tg_name=vibe-dashboard-tg" >> $GITHUB_OUTPUT
+            echo "task_cpu=512" >> $GITHUB_OUTPUT
+            echo "task_memory=1024" >> $GITHUB_OUTPUT
+          elif [ "$ENVIRONMENT" == "staging" ]; then
             echo "ecs_service=vibe-dashboard-staging" >> $GITHUB_OUTPUT
+            echo "task_family=vibe-dashboard-staging" >> $GITHUB_OUTPUT
+            echo "tg_name=vibe-dashboard-staging-tg" >> $GITHUB_OUTPUT
             echo "task_cpu=256" >> $GITHUB_OUTPUT
             echo "task_memory=512" >> $GITHUB_OUTPUT
           else
-            echo "ecs_service=vibe-dashboard-service" >> $GITHUB_OUTPUT
-            echo "task_cpu=512" >> $GITHUB_OUTPUT
-            echo "task_memory=1024" >> $GITHUB_OUTPUT
+            # Feature branch - minimal resources
+            echo "ecs_service=vibe-test-$BRANCH_SLUG" >> $GITHUB_OUTPUT
+            echo "task_family=vibe-test-$BRANCH_SLUG" >> $GITHUB_OUTPUT
+            echo "tg_name=vibe-test-$BRANCH_SLUG-tg" >> $GITHUB_OUTPUT
+            echo "task_cpu=256" >> $GITHUB_OUTPUT
+            echo "task_memory=512" >> $GITHUB_OUTPUT
           fi
 
-          echo "Deploying to: $ENVIRONMENT"
+          echo "Deploying branch '$BRANCH' as environment: $ENVIRONMENT_NAME"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -102,28 +152,48 @@ jobs:
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
+          # Disable cache to ensure fresh builds with latest code
+          no-cache: true
 
-      - name: Check if coding lab changed
+      - name: Check if coding labs changed
         id: changes
         run: |
+          # Check if Continue setup changed
           if git diff --name-only HEAD~1 HEAD | grep -q "^cline-setup/"; then
-            echo "coding_lab_changed=true" >> $GITHUB_OUTPUT
+            echo "continue_changed=true" >> $GITHUB_OUTPUT
           else
-            echo "coding_lab_changed=false" >> $GITHUB_OUTPUT
+            echo "continue_changed=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build and push Coding Lab image (only if changed)
-        if: steps.changes.outputs.coding_lab_changed == 'true' || github.event_name == 'workflow_dispatch'
+          # Check if Cline setup changed
+          if git diff --name-only HEAD~1 HEAD | grep -q "^cline-ai/"; then
+            echo "cline_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "cline_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and push Continue image
+        if: steps.changes.outputs.continue_changed == 'true' || github.event_name == 'workflow_dispatch'
         uses: docker/build-push-action@v5
         with:
           context: ./cline-setup
           push: true
-          build-args: AI_EXTENSION=continue
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:continue
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Cline image
+        if: steps.changes.outputs.cline_changed == 'true' || github.event_name == 'workflow_dispatch'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./cline-ai
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:cline
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -157,17 +227,11 @@ jobs:
           ECS_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=vibe-dashboard-ecs-sg" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
           echo "ecs_sg_id=$ECS_SG_ID" >> $GITHUB_OUTPUT
 
-          # Get target group (production or staging based on environment)
-          ENVIRONMENT="${{ needs.build.outputs.environment }}"
-          if [ "$ENVIRONMENT" == "staging" ]; then
-            TG_NAME="vibe-dashboard-staging-tg"
-          else
-            TG_NAME="vibe-dashboard-tg"
-          fi
+          # Get target group for this environment
+          TG_NAME="${{ needs.build.outputs.tg_name }}"
           TG_ARN=$(aws elbv2 describe-target-groups --names $TG_NAME --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "")
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
           echo "tg_name=$TG_NAME" >> $GITHUB_OUTPUT
-          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
 
           # Get EFS
           EFS_ID=$(aws efs describe-file-systems --creation-token vibe-dashboard-efs --query "FileSystems[0].FileSystemId" --output text 2>/dev/null || echo "")
@@ -176,12 +240,118 @@ jobs:
           AP_ID=$(aws efs describe-access-points --file-system-id $EFS_ID --query "AccessPoints[0].AccessPointId" --output text 2>/dev/null || echo "")
           echo "ap_id=$AP_ID" >> $GITHUB_OUTPUT
 
-          # Check if first-time setup needed (include EFS and access point check)
-          if [ -z "$ECS_SG_ID" ] || [ "$ECS_SG_ID" == "None" ] || [ -z "$TG_ARN" ] || [ "$TG_ARN" == "None" ] || [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ] || [ -z "$AP_ID" ] || [ "$AP_ID" == "None" ]; then
+          # Check if first-time setup needed (core infrastructure)
+          if [ -z "$ECS_SG_ID" ] || [ "$ECS_SG_ID" == "None" ] || [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ] || [ -z "$AP_ID" ] || [ "$AP_ID" == "None" ]; then
             echo "needs_setup=true" >> $GITHUB_OUTPUT
           else
             echo "needs_setup=false" >> $GITHUB_OUTPUT
           fi
+
+          # Check if this specific environment's target group exists
+          if [ -z "$TG_ARN" ] || [ "$TG_ARN" == "None" ]; then
+            echo "needs_tg_setup=true" >> $GITHUB_OUTPUT
+          else
+            echo "needs_tg_setup=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Ensure ecsTaskRole has dashboard permissions
+        run: |
+          # Ensure ecsTaskRole exists
+          aws iam get-role --role-name ecsTaskRole 2>/dev/null || {
+            aws iam create-role --role-name ecsTaskRole --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+          }
+
+          # Dashboard AWS permissions (for managing coding lab instances)
+          # The dashboard uses ECS task role instead of stored credentials
+          cat > /tmp/dashboard-policy.json << 'POLICY'
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Sid": "ECSFullAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "ecs:*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "EC2ReadAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "ec2:DescribeVpcs",
+                  "ec2:DescribeSubnets",
+                  "ec2:DescribeSecurityGroups",
+                  "ec2:DescribeNetworkInterfaces",
+                  "ec2:CreateSecurityGroup",
+                  "ec2:AuthorizeSecurityGroupIngress",
+                  "ec2:AuthorizeSecurityGroupEgress"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "ECRFullAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "ecr:*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "IAMRoleManagement",
+                "Effect": "Allow",
+                "Action": [
+                  "iam:GetRole",
+                  "iam:CreateRole",
+                  "iam:AttachRolePolicy",
+                  "iam:PutRolePolicy",
+                  "iam:PassRole",
+                  "iam:ListRoles"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "CloudWatchLogsAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "logs:CreateLogGroup",
+                  "logs:CreateLogStream",
+                  "logs:PutLogEvents",
+                  "logs:DescribeLogGroups",
+                  "logs:DescribeLogStreams",
+                  "logs:GetLogEvents"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "CloudFrontAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "cloudfront:*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "CodeBuildAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "codebuild:*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "STSAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "sts:GetCallerIdentity"
+                ],
+                "Resource": "*"
+              }
+            ]
+          }
+          POLICY
+          aws iam put-role-policy --role-name ecsTaskRole --policy-name dashboard-aws-access --policy-document file:///tmp/dashboard-policy.json
+          echo "Updated ecsTaskRole with dashboard-aws-access policy"
 
       - name: Checkout for first-time setup
         if: steps.infra.outputs.needs_setup == 'true'
@@ -228,7 +398,7 @@ jobs:
           ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].DNSName' --output text)
           echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
 
-          # Create target group
+          # Create default target group (for production)
           TG_ARN=$(aws elbv2 describe-target-groups --names vibe-dashboard-tg --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
           if [ "$TG_ARN" == "None" ]; then
             TG_ARN=$(aws elbv2 create-target-group --name vibe-dashboard-tg --protocol HTTP --port 3001 --vpc-id $VPC_ID --target-type ip --health-check-path /api/health --query 'TargetGroups[0].TargetGroupArn' --output text)
@@ -245,7 +415,6 @@ jobs:
           EFS_ID=$(aws efs describe-file-systems --creation-token vibe-dashboard-efs --query "FileSystems[0].FileSystemId" --output text 2>/dev/null || echo "None")
           if [ -z "$EFS_ID" ] || [ "$EFS_ID" == "None" ]; then
             EFS_ID=$(aws efs create-file-system --creation-token vibe-dashboard-efs --performance-mode generalPurpose --encrypted --query 'FileSystemId' --output text)
-            # Wait for EFS to be available (polling since aws efs wait doesn't exist)
             echo "Waiting for EFS $EFS_ID to be available..."
             while true; do
               STATUS=$(aws efs describe-file-systems --file-system-id $EFS_ID --query 'FileSystems[0].LifeCycleState' --output text)
@@ -278,44 +447,229 @@ jobs:
             aws iam create-role --role-name ecsTaskRole --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
           }
 
+          # EFS access
           aws iam put-role-policy --role-name ecsTaskRole --policy-name efs-access --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"elasticfilesystem:ClientMount\",\"elasticfilesystem:ClientWrite\",\"elasticfilesystem:ClientRootAccess\"],\"Resource\":\"arn:aws:elasticfilesystem:${{ env.AWS_REGION }}:${AWS_ACCOUNT_ID}:file-system/${EFS_ID}\"}]}"
 
-      - name: Setup staging infrastructure
-        if: needs.build.outputs.environment == 'staging'
-        id: staging-setup
+          # Dashboard AWS permissions (for managing coding lab instances)
+          # The dashboard uses ECS task role instead of stored credentials
+          cat > /tmp/dashboard-policy.json << 'POLICY'
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Sid": "ECSFullAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "ecs:*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "EC2ReadAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "ec2:DescribeVpcs",
+                  "ec2:DescribeSubnets",
+                  "ec2:DescribeSecurityGroups",
+                  "ec2:DescribeNetworkInterfaces",
+                  "ec2:CreateSecurityGroup",
+                  "ec2:AuthorizeSecurityGroupIngress",
+                  "ec2:AuthorizeSecurityGroupEgress"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "ECRFullAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "ecr:*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "IAMRoleManagement",
+                "Effect": "Allow",
+                "Action": [
+                  "iam:GetRole",
+                  "iam:CreateRole",
+                  "iam:AttachRolePolicy",
+                  "iam:PutRolePolicy",
+                  "iam:PassRole",
+                  "iam:ListRoles"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "CloudWatchLogsAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "logs:CreateLogGroup",
+                  "logs:CreateLogStream",
+                  "logs:PutLogEvents",
+                  "logs:DescribeLogGroups",
+                  "logs:DescribeLogStreams",
+                  "logs:GetLogEvents"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "CloudFrontAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "cloudfront:*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "CodeBuildAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "codebuild:*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "STSAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "sts:GetCallerIdentity"
+                ],
+                "Resource": "*"
+              }
+            ]
+          }
+          POLICY
+          aws iam put-role-policy --role-name ecsTaskRole --policy-name dashboard-aws-access --policy-document file:///tmp/dashboard-policy.json
+
+      - name: Setup environment-specific ALB and target group
+        id: env-setup
         run: |
           VPC_ID="${{ steps.infra.outputs.vpc_id }}"
+          SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
+          ENVIRONMENT="${{ needs.build.outputs.environment }}"
+          TG_NAME="${{ needs.build.outputs.tg_name }}"
+          BRANCH_SLUG="${{ needs.build.outputs.branch_slug }}"
 
-          # Get ALB ARN and listener
-          ALB_ARN=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text)
-          LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text)
-
-          # Create staging target group if not exists
-          TG_ARN=$(aws elbv2 describe-target-groups --names vibe-dashboard-staging-tg --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
-          if [ "$TG_ARN" == "None" ] || [ -z "$TG_ARN" ]; then
-            echo "Creating staging target group..."
-            TG_ARN=$(aws elbv2 create-target-group \
-              --name vibe-dashboard-staging-tg \
-              --protocol HTTP --port 3001 \
-              --vpc-id $VPC_ID --target-type ip \
-              --health-check-path /api/health \
-              --query 'TargetGroups[0].TargetGroupArn' --output text)
+          # Get or create ALB security group
+          ALB_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=vibe-dashboard-alb-sg" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+          if [ "$ALB_SG_ID" == "None" ] || [ -z "$ALB_SG_ID" ]; then
+            ALB_SG_ID=$(aws ec2 create-security-group --group-name vibe-dashboard-alb-sg --description "Vibe Dashboard ALB" --vpc-id $VPC_ID --query 'GroupId' --output text)
+            aws ec2 authorize-security-group-ingress --group-id $ALB_SG_ID --protocol tcp --port 80 --cidr 0.0.0.0/0
+            aws ec2 authorize-security-group-ingress --group-id $ALB_SG_ID --protocol tcp --port 443 --cidr 0.0.0.0/0
           fi
+
+          # Determine ALB name based on environment
+          if [ "$ENVIRONMENT" == "production" ]; then
+            ALB_NAME="vibe-dashboard-alb"
+          elif [ "$ENVIRONMENT" == "staging" ]; then
+            ALB_NAME="vibe-dashboard-staging-alb"
+          else
+            # Feature branch gets its own ALB
+            ALB_NAME="vibe-test-${BRANCH_SLUG}-alb"
+            # Truncate to 32 chars max for ALB name
+            ALB_NAME=$(echo "$ALB_NAME" | cut -c1-32)
+          fi
+          echo "alb_name=$ALB_NAME" >> $GITHUB_OUTPUT
+
+          # Check if ALB exists, create if not
+          ALB_ARN=$(aws elbv2 describe-load-balancers --names $ALB_NAME --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
+
+          if [ "$ALB_ARN" == "None" ] || [ -z "$ALB_ARN" ]; then
+            echo "Creating ALB: $ALB_NAME"
+            SUBNET_LIST=$(echo $SUBNET_IDS | tr ',' ' ')
+            ALB_ARN=$(aws elbv2 create-load-balancer \
+              --name $ALB_NAME \
+              --subnets $SUBNET_LIST \
+              --security-groups $ALB_SG_ID \
+              --scheme internet-facing \
+              --type application \
+              --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+
+            echo "Waiting for ALB to be active..."
+            aws elbv2 wait load-balancer-available --load-balancer-arns $ALB_ARN
+          fi
+          echo "alb_arn=$ALB_ARN" >> $GITHUB_OUTPUT
+
+          # Get ALB DNS
+          ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].DNSName' --output text)
+          echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
+
+          # Check if target group exists
+          TG_ARN=$(aws elbv2 describe-target-groups --names $TG_NAME --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
+
+          # First, delete any listeners that might be using this target group
+          # (listeners must be deleted before target groups can be deleted)
+          echo "Checking for existing listener on this ALB..."
+          EXISTING_LISTENER=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text 2>/dev/null || echo "")
+          if [ -n "$EXISTING_LISTENER" ] && [ "$EXISTING_LISTENER" != "None" ]; then
+            echo "Deleting existing listener: $EXISTING_LISTENER"
+            aws elbv2 delete-listener --listener-arn $EXISTING_LISTENER 2>/dev/null || true
+          fi
+
+          if [ "$TG_ARN" != "None" ] && [ -n "$TG_ARN" ]; then
+            echo "Target group exists: $TG_ARN"
+            echo "Checking for old associations on other ALBs..."
+
+            # Find all load balancers and delete listeners/rules using this TG
+            OLD_ALBS=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[*].LoadBalancerArn' --output text 2>/dev/null || echo "")
+            for OLD_ALB in $OLD_ALBS; do
+              OLD_LISTENERS=$(aws elbv2 describe-listeners --load-balancer-arn $OLD_ALB --query 'Listeners[*].ListenerArn' --output text 2>/dev/null || echo "")
+              for OLD_LISTENER in $OLD_LISTENERS; do
+                # Check if this listener's default action uses our target group
+                LISTENER_TG=$(aws elbv2 describe-listeners --listener-arns $OLD_LISTENER --query 'Listeners[0].DefaultActions[0].TargetGroupArn' --output text 2>/dev/null || echo "")
+                if [ "$LISTENER_TG" == "$TG_ARN" ]; then
+                  echo "Deleting listener using old target group: $OLD_LISTENER"
+                  aws elbv2 delete-listener --listener-arn $OLD_LISTENER 2>/dev/null || true
+                fi
+              done
+            done
+
+            # Now delete the target group
+            echo "Deleting old target group..."
+            aws elbv2 delete-target-group --target-group-arn $TG_ARN
+
+            # Wait for deletion to complete
+            echo "Waiting for target group deletion..."
+            for i in {1..10}; do
+              TG_CHECK=$(aws elbv2 describe-target-groups --names $TG_NAME --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
+              if [ "$TG_CHECK" == "None" ] || [ -z "$TG_CHECK" ]; then
+                echo "Target group deleted"
+                break
+              fi
+              echo "Waiting for target group to be deleted... ($i/10)"
+              sleep 3
+            done
+          fi
+
+          # Create fresh target group with better health check settings
+          echo "Creating target group: $TG_NAME"
+          TG_ARN=$(aws elbv2 create-target-group \
+            --name $TG_NAME \
+            --protocol HTTP --port 3001 \
+            --vpc-id $VPC_ID --target-type ip \
+            --health-check-path /api/health \
+            --health-check-interval-seconds 30 \
+            --health-check-timeout-seconds 10 \
+            --healthy-threshold-count 2 \
+            --unhealthy-threshold-count 3 \
+            --query 'TargetGroups[0].TargetGroupArn' --output text)
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
 
-          # Check if header-based routing rule exists for staging
-          RULE_EXISTS=$(aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
-            --query "Rules[?Conditions[?HttpHeaderConfig.HttpHeaderName=='X-Environment']].RuleArn" \
-            --output text 2>/dev/null || echo "")
+          # Create listener (we deleted any existing one earlier)
+          echo "Creating listener for ALB"
+          LISTENER_ARN=$(aws elbv2 create-listener \
+            --load-balancer-arn $ALB_ARN \
+            --protocol HTTP --port 80 \
+            --default-actions Type=forward,TargetGroupArn=$TG_ARN \
+            --query 'Listeners[0].ListenerArn' --output text)
+          echo "listener_arn=$LISTENER_ARN" >> $GITHUB_OUTPUT
 
-          if [ -z "$RULE_EXISTS" ]; then
-            echo "Creating header-based routing rule for staging..."
-            aws elbv2 create-rule \
-              --listener-arn $LISTENER_ARN \
-              --conditions Field=http-header,HttpHeaderConfig="{HttpHeaderName=X-Environment,Values=[staging]}" \
-              --actions Type=forward,TargetGroupArn=$TG_ARN \
-              --priority 10
-          fi
+          echo ""
+          echo "========================================"
+          echo "  ALB Setup Complete"
+          echo "  ALB Name: $ALB_NAME"
+          echo "  ALB DNS:  $ALB_DNS"
+          echo "========================================"
 
       - name: Get ECR registry
         id: ecr
@@ -329,17 +683,11 @@ jobs:
           AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           ECR_REGISTRY="${{ steps.ecr.outputs.registry }}"
           ENVIRONMENT="${{ needs.build.outputs.environment }}"
+          ENVIRONMENT_NAME="${{ needs.build.outputs.environment_name }}"
+          TASK_FAMILY="${{ needs.build.outputs.task_family }}"
           TASK_CPU="${{ needs.build.outputs.task_cpu }}"
           TASK_MEMORY="${{ needs.build.outputs.task_memory }}"
-
-          # Set task family based on environment
-          # Always use NODE_ENV=production so static files are served
-          # Use ENVIRONMENT variable to distinguish staging vs production
-          if [ "$ENVIRONMENT" == "staging" ]; then
-            TASK_FAMILY="vibe-dashboard-staging"
-          else
-            TASK_FAMILY="vibe-dashboard"
-          fi
+          BRANCH_SLUG="${{ needs.build.outputs.branch_slug }}"
 
           # Use setup outputs if first-time, otherwise use infra outputs
           if [ "${{ steps.infra.outputs.needs_setup }}" == "true" ]; then
@@ -367,8 +715,9 @@ jobs:
               "environment": [
                 {"name": "NODE_ENV", "value": "production"},
                 {"name": "ENVIRONMENT", "value": "${ENVIRONMENT}"},
+                {"name": "ENVIRONMENT_NAME", "value": "${ENVIRONMENT_NAME}"},
                 {"name": "PORT", "value": "3001"},
-                {"name": "DATA_DIR", "value": "/mnt/efs/data"}
+                {"name": "DATA_DIR", "value": "/mnt/efs/data/${ENVIRONMENT_NAME}"}
               ],
               "mountPoints": [{"sourceVolume": "efs-data", "containerPath": "/mnt/efs/data", "readOnly": false}],
               "logConfiguration": {
@@ -403,6 +752,7 @@ jobs:
         run: |
           ENVIRONMENT="${{ needs.build.outputs.environment }}"
           ECS_SERVICE_NAME="${{ needs.build.outputs.ecs_service }}"
+          TG_ARN="${{ steps.env-setup.outputs.tg_arn }}"
 
           # Get security group
           if [ "${{ steps.infra.outputs.needs_setup }}" == "true" ]; then
@@ -411,41 +761,75 @@ jobs:
             ECS_SG_ID="${{ steps.infra.outputs.ecs_sg_id }}"
           fi
 
-          # Get target group (staging uses staging-setup output if available)
-          if [ "$ENVIRONMENT" == "staging" ] && [ -n "${{ steps.staging-setup.outputs.tg_arn }}" ]; then
-            TG_ARN="${{ steps.staging-setup.outputs.tg_arn }}"
-          elif [ "${{ steps.infra.outputs.needs_setup }}" == "true" ]; then
-            TG_ARN="${{ steps.setup.outputs.tg_arn }}"
-          else
-            TG_ARN="${{ steps.infra.outputs.tg_arn }}"
-          fi
-
           SUBNET_IDS="${{ steps.infra.outputs.subnet_ids }}"
 
-          echo "Deploying $ENVIRONMENT environment..."
+          echo "Deploying environment: ${{ needs.build.outputs.environment_name }}"
           echo "Service: $ECS_SERVICE_NAME"
           echo "Target Group: $TG_ARN"
 
           # Check if service exists and its status
           SERVICE_STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
 
+          # If service exists, check if its target group matches
+          NEEDS_RECREATE="false"
           if [ "$SERVICE_STATUS" == "ACTIVE" ]; then
+            CURRENT_TG=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].loadBalancers[0].targetGroupArn' --output text 2>/dev/null || echo "")
+            if [ "$CURRENT_TG" != "$TG_ARN" ]; then
+              echo "Target group changed from $CURRENT_TG to $TG_ARN"
+              echo "Service must be recreated (can't change load balancer config on existing service)"
+              NEEDS_RECREATE="true"
+            fi
+          fi
+
+          if [ "$SERVICE_STATUS" == "ACTIVE" ] && [ "$NEEDS_RECREATE" == "false" ]; then
             echo "Updating existing service..."
             aws ecs update-service \
               --cluster ${{ env.ECS_CLUSTER }} \
               --service $ECS_SERVICE_NAME \
               --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
               --force-new-deployment
-          elif [ "$SERVICE_STATUS" == "DRAINING" ]; then
-            echo "Service is draining, waiting for it to complete..."
-            while true; do
+          elif [ "$SERVICE_STATUS" == "ACTIVE" ] && [ "$NEEDS_RECREATE" == "true" ]; then
+            echo "Deleting service to recreate with new target group..."
+            aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SERVICE_NAME --desired-count 0 2>/dev/null || true
+            aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SERVICE_NAME --force
+            echo "Waiting for service to be fully deleted..."
+
+            # Wait for service to become INACTIVE (not just drained)
+            for i in {1..60}; do
               STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
-              if [ "$STATUS" == "INACTIVE" ] || [ "$STATUS" == "MISSING" ]; then
-                echo "Service is now inactive"
+              RUNNING=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].runningCount' --output text 2>/dev/null || echo "0")
+              echo "Service status: $STATUS, running tasks: $RUNNING ($i/60)"
+              if [ "$STATUS" == "INACTIVE" ] || [ "$STATUS" == "MISSING" ] || [ "$STATUS" == "None" ]; then
+                echo "Service is now inactive - ready to create new service"
                 break
               fi
-              echo "Still draining... waiting 10s"
-              sleep 10
+              # Keep waiting even if DRAINING with 0 tasks - must wait for INACTIVE
+              sleep 5
+            done
+
+            echo "Creating new service with new target group..."
+            aws ecs create-service \
+              --cluster ${{ env.ECS_CLUSTER }} \
+              --service-name $ECS_SERVICE_NAME \
+              --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
+              --desired-count 1 \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_IDS],securityGroups=[$ECS_SG_ID],assignPublicIp=ENABLED}" \
+              --load-balancers "targetGroupArn=$TG_ARN,containerName=${{ env.CONTAINER_NAME }},containerPort=3001" \
+              --deployment-configuration "minimumHealthyPercent=0,maximumPercent=200" \
+              --health-check-grace-period-seconds 120
+          elif [ "$SERVICE_STATUS" == "DRAINING" ]; then
+            echo "Service is draining, waiting for it to become inactive..."
+            for i in {1..60}; do
+              STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+              RUNNING=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].runningCount' --output text 2>/dev/null || echo "0")
+              echo "Service status: $STATUS, running tasks: $RUNNING ($i/60)"
+              if [ "$STATUS" == "INACTIVE" ] || [ "$STATUS" == "MISSING" ] || [ "$STATUS" == "None" ]; then
+                echo "Service is now inactive - ready to create new service"
+                break
+              fi
+              # Keep waiting - must reach INACTIVE before creating new service
+              sleep 5
             done
 
             echo "Creating new service..."
@@ -458,11 +842,12 @@ jobs:
               --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_IDS],securityGroups=[$ECS_SG_ID],assignPublicIp=ENABLED}" \
               --load-balancers "targetGroupArn=$TG_ARN,containerName=${{ env.CONTAINER_NAME }},containerPort=3001" \
               --deployment-configuration "minimumHealthyPercent=0,maximumPercent=200" \
-              --health-check-grace-period-seconds 60
+              --health-check-grace-period-seconds 120
           else
             echo "Creating new service..."
             # Delete inactive service if exists
             aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SERVICE_NAME --force 2>/dev/null || true
+            sleep 5
 
             aws ecs create-service \
               --cluster ${{ env.ECS_CLUSTER }} \
@@ -473,31 +858,38 @@ jobs:
               --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_IDS],securityGroups=[$ECS_SG_ID],assignPublicIp=ENABLED}" \
               --load-balancers "targetGroupArn=$TG_ARN,containerName=${{ env.CONTAINER_NAME }},containerPort=3001" \
               --deployment-configuration "minimumHealthyPercent=0,maximumPercent=200" \
-              --health-check-grace-period-seconds 60
+              --health-check-grace-period-seconds 120
           fi
 
       - name: Output URLs
         run: |
           ENVIRONMENT="${{ needs.build.outputs.environment }}"
+          ENVIRONMENT_NAME="${{ needs.build.outputs.environment_name }}"
           ECS_SERVICE_NAME="${{ needs.build.outputs.ecs_service }}"
-          ALB_DNS=$(aws elbv2 describe-load-balancers --names vibe-dashboard-alb --query 'LoadBalancers[0].DNSName' --output text)
-          CF_DOMAIN=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[0].DomainName=='$ALB_DNS'].DomainName" --output text 2>/dev/null || echo "")
+          BRANCH_SLUG="${{ needs.build.outputs.branch_slug }}"
+          ALB_DNS="${{ steps.env-setup.outputs.alb_dns }}"
+          ALB_NAME="${{ steps.env-setup.outputs.alb_name }}"
 
           echo ""
           echo "========================================"
-          echo "  ${ENVIRONMENT^^} DEPLOYMENT COMPLETE!"
+          echo "  DEPLOYMENT COMPLETE!"
           echo "========================================"
           echo ""
-          echo "  Environment: $ENVIRONMENT"
+          echo "  Environment: $ENVIRONMENT_NAME"
           echo "  Service: $ECS_SERVICE_NAME"
+          echo "  Branch: ${{ github.ref_name }}"
+          echo "  ALB: $ALB_NAME"
           echo ""
-          if [ "$ENVIRONMENT" == "staging" ]; then
-            echo "  Access staging via header:"
-            echo "  curl -H 'X-Environment: staging' http://$ALB_DNS/api/health"
-          else
-            if [ -n "$CF_DOMAIN" ] && [ "$CF_DOMAIN" != "None" ]; then
-              echo "  HTTPS: https://$CF_DOMAIN"
-            fi
-            echo "  HTTP:  http://$ALB_DNS"
+          echo "  URLs (direct access - no headers needed):"
+          echo "    Dashboard:    http://$ALB_DNS"
+          echo "    Admin Login:  http://$ALB_DNS/#/login"
+          echo "    Admin Panel:  http://$ALB_DNS/#/admin"
+          echo "    Participant:  http://$ALB_DNS/#/enter"
+          echo "    Health Check: http://$ALB_DNS/api/health"
+          echo "    Version:      http://$ALB_DNS/api/version"
+          echo ""
+          if [ "$ENVIRONMENT" == "test" ]; then
+            echo "  Note: This is a feature branch deployment with its own ALB."
+            echo "  Main branch (production) remains unaffected at vibe-dashboard-alb"
           fi
           echo "========================================"

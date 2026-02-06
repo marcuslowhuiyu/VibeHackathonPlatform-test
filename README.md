@@ -11,13 +11,6 @@ A complete platform for running coding hackathons with cloud-based VS Code insta
 | **Admin Dashboard** | https://d3ubsvjdhuk97c.cloudfront.net/#/admin |
 | **Admin Login** | https://d3ubsvjdhuk97c.cloudfront.net/#/login |
 
-### Staging
-| Page | URL |
-|------|-----|
-| **Participant Entry** | https://d2gjoxlutncseu.cloudfront.net/#/enter |
-| **Admin Dashboard** | https://d2gjoxlutncseu.cloudfront.net/#/admin |
-| **Admin Login** | https://d2gjoxlutncseu.cloudfront.net/#/login |
-
 ## Features
 
 ### For Organizers (Admin Dashboard)

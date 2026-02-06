@@ -594,74 +594,62 @@ jobs:
           ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].DNSName' --output text)
           echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
 
-          # Check if target group exists
+          # Check if target group exists - REUSE if it does, only create if missing
           TG_ARN=$(aws elbv2 describe-target-groups --names $TG_NAME --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
 
-          # First, delete any listeners that might be using this target group
-          # (listeners must be deleted before target groups can be deleted)
-          echo "Checking for existing listener on this ALB..."
-          EXISTING_LISTENER=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text 2>/dev/null || echo "")
-          if [ -n "$EXISTING_LISTENER" ] && [ "$EXISTING_LISTENER" != "None" ]; then
-            echo "Deleting existing listener: $EXISTING_LISTENER"
-            aws elbv2 delete-listener --listener-arn $EXISTING_LISTENER 2>/dev/null || true
-          fi
-
           if [ "$TG_ARN" != "None" ] && [ -n "$TG_ARN" ]; then
-            echo "Target group exists: $TG_ARN"
-            echo "Checking for old associations on other ALBs..."
+            echo "Reusing existing target group: $TG_ARN"
 
-            # Find all load balancers and delete listeners/rules using this TG
-            OLD_ALBS=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[*].LoadBalancerArn' --output text 2>/dev/null || echo "")
-            for OLD_ALB in $OLD_ALBS; do
-              OLD_LISTENERS=$(aws elbv2 describe-listeners --load-balancer-arn $OLD_ALB --query 'Listeners[*].ListenerArn' --output text 2>/dev/null || echo "")
-              for OLD_LISTENER in $OLD_LISTENERS; do
-                # Check if this listener's default action uses our target group
-                LISTENER_TG=$(aws elbv2 describe-listeners --listener-arns $OLD_LISTENER --query 'Listeners[0].DefaultActions[0].TargetGroupArn' --output text 2>/dev/null || echo "")
-                if [ "$LISTENER_TG" == "$TG_ARN" ]; then
-                  echo "Deleting listener using old target group: $OLD_LISTENER"
-                  aws elbv2 delete-listener --listener-arn $OLD_LISTENER 2>/dev/null || true
-                fi
-              done
-            done
-
-            # Now delete the target group
-            echo "Deleting old target group..."
-            aws elbv2 delete-target-group --target-group-arn $TG_ARN
-
-            # Wait for deletion to complete
-            echo "Waiting for target group deletion..."
-            for i in {1..10}; do
-              TG_CHECK=$(aws elbv2 describe-target-groups --names $TG_NAME --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
-              if [ "$TG_CHECK" == "None" ] || [ -z "$TG_CHECK" ]; then
-                echo "Target group deleted"
-                break
-              fi
-              echo "Waiting for target group to be deleted... ($i/10)"
-              sleep 3
-            done
+            # Update health check settings on existing target group
+            echo "Updating target group health check settings..."
+            aws elbv2 modify-target-group \
+              --target-group-arn $TG_ARN \
+              --health-check-path /api/health \
+              --health-check-interval-seconds 30 \
+              --health-check-timeout-seconds 10 \
+              --healthy-threshold-count 2 \
+              --unhealthy-threshold-count 3 || true
+          else
+            # Create new target group only if it doesn't exist
+            echo "Creating target group: $TG_NAME"
+            TG_ARN=$(aws elbv2 create-target-group \
+              --name $TG_NAME \
+              --protocol HTTP --port 3001 \
+              --vpc-id $VPC_ID --target-type ip \
+              --health-check-path /api/health \
+              --health-check-interval-seconds 30 \
+              --health-check-timeout-seconds 10 \
+              --healthy-threshold-count 2 \
+              --unhealthy-threshold-count 3 \
+              --query 'TargetGroups[0].TargetGroupArn' --output text)
           fi
-
-          # Create fresh target group with better health check settings
-          echo "Creating target group: $TG_NAME"
-          TG_ARN=$(aws elbv2 create-target-group \
-            --name $TG_NAME \
-            --protocol HTTP --port 3001 \
-            --vpc-id $VPC_ID --target-type ip \
-            --health-check-path /api/health \
-            --health-check-interval-seconds 30 \
-            --health-check-timeout-seconds 10 \
-            --healthy-threshold-count 2 \
-            --unhealthy-threshold-count 3 \
-            --query 'TargetGroups[0].TargetGroupArn' --output text)
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
 
-          # Create listener (we deleted any existing one earlier)
-          echo "Creating listener for ALB"
-          LISTENER_ARN=$(aws elbv2 create-listener \
-            --load-balancer-arn $ALB_ARN \
-            --protocol HTTP --port 80 \
-            --default-actions Type=forward,TargetGroupArn=$TG_ARN \
-            --query 'Listeners[0].ListenerArn' --output text)
+          # Check if listener exists on this ALB
+          EXISTING_LISTENER=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text 2>/dev/null || echo "")
+
+          if [ -n "$EXISTING_LISTENER" ] && [ "$EXISTING_LISTENER" != "None" ]; then
+            # Check if listener is already pointing to our target group
+            LISTENER_TG=$(aws elbv2 describe-listeners --listener-arns $EXISTING_LISTENER --query 'Listeners[0].DefaultActions[0].TargetGroupArn' --output text 2>/dev/null || echo "")
+
+            if [ "$LISTENER_TG" == "$TG_ARN" ]; then
+              echo "Listener already configured correctly for target group"
+              LISTENER_ARN=$EXISTING_LISTENER
+            else
+              echo "Updating listener to point to target group: $TG_ARN"
+              aws elbv2 modify-listener \
+                --listener-arn $EXISTING_LISTENER \
+                --default-actions Type=forward,TargetGroupArn=$TG_ARN
+              LISTENER_ARN=$EXISTING_LISTENER
+            fi
+          else
+            echo "Creating listener for ALB"
+            LISTENER_ARN=$(aws elbv2 create-listener \
+              --load-balancer-arn $ALB_ARN \
+              --protocol HTTP --port 80 \
+              --default-actions Type=forward,TargetGroupArn=$TG_ARN \
+              --query 'Listeners[0].ListenerArn' --output text)
+          fi
           echo "listener_arn=$LISTENER_ARN" >> $GITHUB_OUTPUT
 
           echo ""
@@ -669,6 +657,7 @@ jobs:
           echo "  ALB Setup Complete"
           echo "  ALB Name: $ALB_NAME"
           echo "  ALB DNS:  $ALB_DNS"
+          echo "  Target Group: $TG_NAME"
           echo "========================================"
 
       - name: Get ECR registry

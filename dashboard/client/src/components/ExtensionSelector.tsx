@@ -27,7 +27,31 @@ const EXTENSIONS: Extension[] = [
     credentialSupport: 'Reads from ~/.continue/config.json - credentials auto-configured',
     recommended: true,
     docsUrl: 'https://continue.dev/docs'
-  }
+  },
+  {
+    id: 'vibe',
+    name: 'Vibe',
+    description: 'AI-powered coding for non-technical users with chat and live preview UI',
+    features: [
+      'Chat-based AI interface',
+      'Live preview UI',
+      'Beginner-friendly workflow',
+      'AWS Bedrock integration'
+    ],
+    credentialSupport: 'AWS credentials auto-configured via task role',
+  },
+  {
+    id: 'vibe-pro',
+    name: 'Vibe Pro',
+    description: 'Enhanced Vibe with codebase-aware AI for complex multi-file applications',
+    features: [
+      'Codebase-aware AI context',
+      'Multi-file project support',
+      'Live preview UI',
+      'Advanced AWS Bedrock integration'
+    ],
+    credentialSupport: 'AWS credentials auto-configured via task role',
+  },
 ]
 
 export default function ExtensionSelector() {

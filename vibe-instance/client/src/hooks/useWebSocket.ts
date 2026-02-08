@@ -6,6 +6,12 @@ export interface Message {
   toolCalls?: { name: string; input: string; result: string }[];
 }
 
+// Derive the base path from the URL pathname (e.g., /i/vibe-vb-xxxxx)
+function getBasePath(): string {
+  const match = window.location.pathname.match(/^(\/i\/[^/]+)/);
+  return match ? match[1] : '';
+}
+
 export function useWebSocket(): {
   messages: Message[];
   isThinking: boolean;
@@ -13,6 +19,7 @@ export function useWebSocket(): {
   currentFileChange: { path: string; content: string } | null;
   sendMessage: (text: string) => void;
   sendElementClick: (info: { tagName: string; textContent: string; selector: string }) => void;
+  basePath: string;
 } {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isThinking, setIsThinking] = useState(false);
@@ -20,11 +27,12 @@ export function useWebSocket(): {
   const [currentFileChange, setCurrentFileChange] = useState<{ path: string; content: string } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const basePath = getBasePath();
 
   useEffect(() => {
     function connect() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}`;
+      const wsUrl = `${protocol}//${window.location.host}${basePath}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -158,5 +166,6 @@ export function useWebSocket(): {
     currentFileChange,
     sendMessage,
     sendElementClick,
+    basePath,
   };
 }

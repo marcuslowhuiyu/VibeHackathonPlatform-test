@@ -14,6 +14,8 @@ import { setupWebSocket } from './websocket.js';
 
 const PROJECT_ROOT = '/home/workspace/project';
 const INSTANCE_MODE = (process.env.INSTANCE_MODE || 'vibe') as 'vibe' | 'vibe-pro';
+const INSTANCE_ID = process.env.INSTANCE_ID || '';
+const BASE_PATH = INSTANCE_ID ? `/i/${INSTANCE_ID}` : '';
 const PORT = 8080;
 
 const __filename = fileURLToPath(import.meta.url);
@@ -85,9 +87,26 @@ function isWithinRoot(filePath: string, root: string): boolean {
 const app = express();
 app.use(express.json());
 
+// Strip the ALB base path prefix (/i/{instanceId}) so routes work at /
+// The ALB routes /i/{instanceId}/* to this container on port 8080
+if (BASE_PATH) {
+  app.use((req, _res, next) => {
+    if (req.url.startsWith(BASE_PATH)) {
+      req.url = req.url.slice(BASE_PATH.length) || '/';
+    }
+    next();
+  });
+}
+
 // Serve the built client UI
 const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
 app.use(express.static(clientDistPath));
+
+// ---- Config endpoint (client reads base path from here) ------------------
+
+app.get('/api/config', (_req, res) => {
+  res.json({ basePath: BASE_PATH, mode: INSTANCE_MODE, instanceId: INSTANCE_ID });
+});
 
 // ---- Health check --------------------------------------------------------
 

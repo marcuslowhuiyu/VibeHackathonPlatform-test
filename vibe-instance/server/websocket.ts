@@ -60,12 +60,17 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
       send(ws, { type: 'agent:file_changed', path: data.path, content: data.content });
     };
 
+    const onError = (data: { error: string }) => {
+      send(ws, { type: 'error', message: data.error });
+    };
+
     // Register listeners
     agentLoop.on('agent:thinking', onThinking);
     agentLoop.on('agent:text', onText);
     agentLoop.on('agent:tool_call', onToolCall);
     agentLoop.on('agent:tool_result', onToolResult);
     agentLoop.on('agent:file_changed', onFileChanged);
+    agentLoop.on('agent:error', onError);
 
     // ------------------------------------------------------------------
     // Handle incoming messages from the client
@@ -122,6 +127,7 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
       agentLoop.off('agent:tool_call', onToolCall);
       agentLoop.off('agent:tool_result', onToolResult);
       agentLoop.off('agent:file_changed', onFileChanged);
+      agentLoop.off('agent:error', onError);
     });
   });
 }

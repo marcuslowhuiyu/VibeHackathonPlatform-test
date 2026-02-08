@@ -172,6 +172,25 @@ async function main(): Promise<void> {
   // Create the agent loop
   const agentLoop = new AgentLoop(INSTANCE_MODE, repoMap);
 
+  // Verify Bedrock connectivity
+  const bedrockModelId = process.env.BEDROCK_MODEL_ID || 'anthropic.claude-sonnet-4-20250514-v1:0';
+  console.log(`Checking Bedrock connectivity (model: ${bedrockModelId}, region: ${process.env.AWS_REGION || 'default'})...`);
+  try {
+    const { BedrockRuntimeClient, ConverseCommand } = await import('@aws-sdk/client-bedrock-runtime');
+    const testClient = new BedrockRuntimeClient({});
+    await testClient.send(new ConverseCommand({
+      modelId: bedrockModelId,
+      messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      inferenceConfig: { maxTokens: 1 },
+    }));
+    console.log('Bedrock connectivity OK');
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`WARNING: Bedrock health check failed: ${message}`);
+    console.error('Chat will not work until Bedrock access is configured.');
+    console.error(`Model: ${bedrockModelId} | Region: ${process.env.AWS_REGION || 'not set'}`);
+  }
+
   // Create the HTTP server and attach WebSocket
   const server = createServer(app);
   setupWebSocket(server, agentLoop);

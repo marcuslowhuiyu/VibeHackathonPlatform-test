@@ -510,14 +510,14 @@ phases:
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
   build:
     commands:
-      - echo "=== Building Continue extension from cline-setup/ ==="
-      - cd cline-setup
+      - echo "=== Building Continue extension from continue-instance/ ==="
+      - cd continue-instance
       - docker build -t vibe-coding-lab:continue .
       - docker tag vibe-coding-lab:continue $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
       - docker tag vibe-coding-lab:continue $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
       - cd ..
-      - echo "=== Building Cline extension from cline-ai/ ==="
-      - cd cline-ai
+      - echo "=== Building Cline extension from cline-instance/ ==="
+      - cd cline-instance
       - docker build -t vibe-coding-lab:cline .
       - docker tag vibe-coding-lab:cline $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
       - cd ..
@@ -614,8 +614,8 @@ export const AI_EXTENSIONS = ['continue', 'cline'] as const;
 export type AIExtension = typeof AI_EXTENSIONS[number];
 
 export const EXTENSION_DIRECTORIES: Record<AIExtension, string> = {
-  continue: 'cline-setup',
-  cline: 'cline-ai',
+  continue: 'continue-instance',
+  cline: 'cline-instance',
 };
 
 export async function checkSetupStatus(): Promise<{
@@ -771,7 +771,7 @@ export async function getDockerPushCommands(): Promise<string> {
 aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com
 
 # 2. Build the image
-cd cline-setup
+cd continue-instance
 docker build -t vibe-coding-lab:latest .
 
 # 3. Tag and push to ECR

@@ -14,8 +14,7 @@ export interface Instance {
   participant_email?: string
   notes?: string
   // AI extension used for this instance
-  // To add new extensions, update the type: 'continue' | 'cline' | 'roo-code'
-  ai_extension?: 'continue'
+  ai_extension?: 'continue' | 'cline' | 'vibe' | 'vibe-pro'
   // CloudFront fields for HTTPS access
   cloudfront_distribution_id?: string
   cloudfront_domain?: string

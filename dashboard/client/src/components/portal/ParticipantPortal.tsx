@@ -207,7 +207,10 @@ export default function ParticipantPortal({ user, onLogout }: ParticipantPortalP
 
             {/* Action Buttons */}
             <div className="grid md:grid-cols-2 gap-4">
-              {/* VS Code Button */}
+              {/* VS Code / Vibe Studio Button */}
+              {(() => {
+                const isVibeInstance = instance.ai_extension === 'vibe' || instance.ai_extension === 'vibe-pro';
+                return (
               <a
                 href={instance.vscode_url || '#'}
                 target="_blank"
@@ -225,13 +228,15 @@ export default function ParticipantPortal({ user, onLogout }: ParticipantPortalP
               >
                 <Code className="w-8 h-8" />
                 <div className="text-left">
-                  <div className="font-semibold text-lg">Open VS Code</div>
+                  <div className="font-semibold text-lg">{isVibeInstance ? 'Open Vibe Studio' : 'Open VS Code'}</div>
                   <div className="text-sm opacity-75">
-                    {instance.vscode_url ? 'Start coding in your browser' : 'Waiting for instance...'}
+                    {instance.vscode_url ? (isVibeInstance ? 'Start building with AI' : 'Start coding in your browser') : 'Waiting for instance...'}
                   </div>
                 </div>
                 <ExternalLink className="w-5 h-5 ml-auto" />
               </a>
+                );
+              })()}
 
               {/* React App Button */}
               <a
@@ -265,9 +270,19 @@ export default function ParticipantPortal({ user, onLogout }: ParticipantPortalP
               <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
                 <h4 className="font-medium text-gray-300 mb-2">Tips:</h4>
                 <ul className="text-sm text-gray-400 space-y-1">
-                  <li>• VS Code runs in your browser - no installation needed</li>
-                  <li>• Your React app auto-refreshes when you save changes</li>
-                  <li>• The AI assistant (Continue) is pre-configured and ready to use</li>
+                  {instance.ai_extension === 'vibe' || instance.ai_extension === 'vibe-pro' ? (
+                    <>
+                      <li>• Vibe Studio runs in your browser - no installation needed</li>
+                      <li>• Chat with AI to build your app - it writes the code for you</li>
+                      <li>• Your app preview updates live as changes are made</li>
+                    </>
+                  ) : (
+                    <>
+                      <li>• VS Code runs in your browser - no installation needed</li>
+                      <li>• Your React app auto-refreshes when you save changes</li>
+                      <li>• The AI assistant ({instance.ai_extension === 'cline' ? 'Cline' : 'Continue'}) is pre-configured and ready to use</li>
+                    </>
+                  )}
                 </ul>
               </div>
             )}

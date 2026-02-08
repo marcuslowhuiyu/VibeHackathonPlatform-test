@@ -11,8 +11,8 @@ on:
       - 'test/**'
     paths:
       - 'dashboard/**'
-      - 'cline-setup/**'
-      - 'cline-ai/**'
+      - 'continue-instance/**'
+      - 'cline-instance/**'
       - '.github/workflows/deploy-dashboard.yml'
   workflow_dispatch:
     inputs:
@@ -161,14 +161,14 @@ jobs:
         id: changes
         run: |
           # Check if Continue setup changed
-          if git diff --name-only HEAD~1 HEAD | grep -q "^cline-setup/"; then
+          if git diff --name-only HEAD~1 HEAD | grep -q "^continue-instance/"; then
             echo "continue_changed=true" >> $GITHUB_OUTPUT
           else
             echo "continue_changed=false" >> $GITHUB_OUTPUT
           fi
 
           # Check if Cline setup changed
-          if git diff --name-only HEAD~1 HEAD | grep -q "^cline-ai/"; then
+          if git diff --name-only HEAD~1 HEAD | grep -q "^cline-instance/"; then
             echo "cline_changed=true" >> $GITHUB_OUTPUT
           else
             echo "cline_changed=false" >> $GITHUB_OUTPUT
@@ -178,7 +178,7 @@ jobs:
         if: steps.changes.outputs.continue_changed == 'true' || github.event_name == 'workflow_dispatch'
         uses: docker/build-push-action@v5
         with:
-          context: ./cline-setup
+          context: ./continue-instance
           push: true
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:continue
@@ -190,7 +190,7 @@ jobs:
         if: steps.changes.outputs.cline_changed == 'true' || github.event_name == 'workflow_dispatch'
         uses: docker/build-push-action@v5
         with:
-          context: ./cline-ai
+          context: ./cline-instance
           push: true
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:cline

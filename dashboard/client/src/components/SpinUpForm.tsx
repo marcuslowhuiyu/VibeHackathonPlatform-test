@@ -5,9 +5,7 @@ import { Plus, Loader2, Minus, AlertTriangle, CheckCircle, Package, Bot, Users }
 // AI EXTENSION CONFIGURATION
 // Add new AI extensions here to scale support
 // ==========================================
-type AIExtension = 'continue' | 'cline'
-// To add more extensions, update the type:
-// type AIExtension = 'continue' | 'cline' | 'roo-code'
+type AIExtension = 'continue' | 'cline' | 'vibe' | 'vibe-pro'
 
 interface ExtensionConfig {
   name: string
@@ -32,13 +30,20 @@ const AI_EXTENSIONS: Record<AIExtension, ExtensionConfig> = {
     bgColor: 'bg-violet-600',
     enabled: true,
   },
-  // 'roo-code': {
-  //   name: 'Roo Code',
-  //   description: 'Enhanced Cline fork with additional features',
-  //   color: 'text-amber-400',
-  //   bgColor: 'bg-amber-600',
-  //   enabled: false,
-  // },
+  vibe: {
+    name: 'Vibe',
+    description: 'AI-powered coding for non-technical users. Chat + live preview UI.',
+    color: 'text-pink-400',
+    bgColor: 'bg-pink-600',
+    enabled: true,
+  },
+  'vibe-pro': {
+    name: 'Vibe Pro',
+    description: 'Enhanced Vibe with codebase-aware AI. Better for complex multi-file apps.',
+    color: 'text-amber-400',
+    bgColor: 'bg-amber-600',
+    enabled: true,
+  },
 }
 
 // Get list of enabled extensions for UI

@@ -10,6 +10,7 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   toolCalls?: ToolCall[];
+  isError?: boolean;
 }
 
 interface ChatPanelProps {
@@ -119,7 +120,7 @@ export default function ChatPanel({ messages, prefillMessage, onSendMessage, isT
             <div className="flex items-start gap-3">
               <div
                 className={`w-7 h-7 rounded-full shrink-0 flex items-center justify-center ${
-                  msg.role === 'user' ? 'bg-blue-600' : 'bg-purple-600'
+                  msg.role === 'user' ? 'bg-blue-600' : msg.isError ? 'bg-red-600' : 'bg-purple-600'
                 }`}
               >
                 <span className="text-xs font-bold text-white">
@@ -127,7 +128,7 @@ export default function ChatPanel({ messages, prefillMessage, onSendMessage, isT
                 </span>
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm text-gray-200 whitespace-pre-wrap break-words">{msg.content}</p>
+                <p className={`text-sm whitespace-pre-wrap break-words ${msg.isError ? 'text-red-400' : 'text-gray-200'}`}>{msg.content}</p>
                 {msg.toolCalls?.map((tool, tIdx) => (
                   <ToolCallCard key={tIdx} tool={tool} />
                 ))}

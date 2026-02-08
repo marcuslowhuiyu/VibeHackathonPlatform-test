@@ -4,6 +4,7 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   toolCalls?: { name: string; input: string; result: string }[];
+  isError?: boolean;
 }
 
 // Derive the base path from the URL pathname (e.g., /i/vibe-vb-xxxxx)
@@ -115,6 +116,14 @@ export function useWebSocket(): {
 
           case 'prefill':
             setPrefillMessage(data.message ?? '');
+            break;
+
+          case 'error':
+            setIsThinking(false);
+            setMessages((prev) => [
+              ...prev,
+              { role: 'assistant', content: `Error: ${data.message || 'Something went wrong'}`, isError: true },
+            ]);
             break;
         }
       };

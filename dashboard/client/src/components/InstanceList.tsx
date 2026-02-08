@@ -280,7 +280,7 @@ export default function InstanceList({ instances }: InstanceListProps) {
     const links = activeWithUrls
       .map(
         (i) =>
-          `${i.participant_name || i.id}${i.participant_email ? ` (${i.participant_email})` : ''}\nVS Code: ${i.vscode_url}\nReact App: ${i.app_url || 'N/A'}\n`
+          `${i.participant_name || i.id}${i.participant_email ? ` (${i.participant_email})` : ''}\n${i.ai_extension === 'vibe' || i.ai_extension === 'vibe-pro' ? 'Vibe Studio' : 'VS Code'}: ${i.vscode_url}\nReact App: ${i.app_url || 'N/A'}\n`
       )
       .join('\n')
 
@@ -488,7 +488,7 @@ export default function InstanceList({ instances }: InstanceListProps) {
                         rel="noopener noreferrer"
                         className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-sm flex items-center gap-1"
                       >
-                        VS Code
+                        {instance.ai_extension === 'vibe' || instance.ai_extension === 'vibe-pro' ? 'Vibe Studio' : 'VS Code'}
                         <ExternalLink className="w-3 h-3" />
                       </a>
                       <a
@@ -659,7 +659,7 @@ export default function InstanceList({ instances }: InstanceListProps) {
                       )}
 
                       <div className="flex flex-col">
-                        <span className="text-gray-500 text-xs">VS Code URL</span>
+                        <span className="text-gray-500 text-xs">{instance.ai_extension === 'vibe' || instance.ai_extension === 'vibe-pro' ? 'Vibe Studio URL' : 'VS Code URL'}</span>
                         {instance.vscode_url ? (
                           <div className="flex items-center gap-1">
                             {instance.vscode_url.startsWith('https://') ? (

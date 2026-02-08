@@ -521,11 +521,19 @@ phases:
       - docker build -t vibe-coding-lab:cline .
       - docker tag vibe-coding-lab:cline $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
       - cd ..
+      - echo "=== Building Vibe extension from vibe-instance/ ==="
+      - cd vibe-instance
+      - docker build -t vibe-coding-lab:vibe .
+      - docker tag vibe-coding-lab:vibe $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe
+      - docker tag vibe-coding-lab:vibe $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe-pro
+      - cd ..
   post_build:
     commands:
       - echo Pushing the Docker images...
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe-pro
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
       - echo Build completed
 `;
@@ -610,12 +618,14 @@ phases:
   }
 }
 
-export const AI_EXTENSIONS = ['continue', 'cline'] as const;
+export const AI_EXTENSIONS = ['continue', 'cline', 'vibe', 'vibe-pro'] as const;
 export type AIExtension = typeof AI_EXTENSIONS[number];
 
 export const EXTENSION_DIRECTORIES: Record<AIExtension, string> = {
   continue: 'continue-instance',
   cline: 'cline-instance',
+  vibe: 'vibe-instance',
+  'vibe-pro': 'vibe-instance',
 };
 
 export async function checkSetupStatus(): Promise<{
@@ -770,15 +780,29 @@ export async function getDockerPushCommands(): Promise<string> {
 # 1. Authenticate Docker with ECR
 aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com
 
-# 2. Build the image
+# 2. Build and push Continue image
 cd continue-instance
-docker build -t vibe-coding-lab:latest .
-
-# 3. Tag and push to ECR
-docker tag vibe-coding-lab:latest ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:latest
+docker build -t vibe-coding-lab:continue .
+docker tag vibe-coding-lab:continue ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:continue
+docker tag vibe-coding-lab:continue ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:latest
+docker push ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:continue
 docker push ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:latest
+cd ..
 
-# 4. Return to dashboard directory
+# 3. Build and push Cline image
+cd cline-instance
+docker build -t vibe-coding-lab:cline .
+docker tag vibe-coding-lab:cline ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:cline
+docker push ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:cline
+cd ..
+
+# 4. Build and push Vibe image
+cd vibe-instance
+docker build -t vibe-coding-lab:vibe .
+docker tag vibe-coding-lab:vibe ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:vibe
+docker tag vibe-coding-lab:vibe ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:vibe-pro
+docker push ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:vibe
+docker push ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:vibe-pro
 cd ..`;
   } catch (err: any) {
     return `# Error: ${err.message}`;

@@ -165,7 +165,7 @@ export async function runTask(instanceId: string, extension: string = 'continue'
             ...(extension === 'vibe' || extension === 'vibe-pro' ? [
               { name: 'INSTANCE_MODE', value: extension === 'vibe-pro' ? 'vibe-pro' : 'vibe' },
             ] : []),
-            { name: 'BEDROCK_MODEL_ID', value: process.env.BEDROCK_MODEL_ID || 'anthropic.claude-sonnet-4-20250514-v1:0' },
+            { name: 'BEDROCK_MODEL_ID', value: process.env.BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-20250514-v1:0' },
           ],
         },
       ],

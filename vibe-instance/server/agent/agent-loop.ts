@@ -14,7 +14,7 @@ import { executeTool, TOOL_DEFINITIONS } from "./tools.js";
 // Constants
 // ---------------------------------------------------------------------------
 
-const MODEL_ID = process.env.BEDROCK_MODEL_ID || "anthropic.claude-sonnet-4-20250514-v1:0";
+const MODEL_ID = process.env.BEDROCK_MODEL_ID || "us.anthropic.claude-sonnet-4-20250514-v1:0";
 const MAX_ITERATIONS = 25; // safety limit to prevent infinite loops
 
 // ---------------------------------------------------------------------------

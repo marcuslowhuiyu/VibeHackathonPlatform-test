@@ -9,92 +9,124 @@ import {
   Instance,
   getUnassignedParticipants,
   assignParticipantToInstance,
+  getConfig,
 } from '../db/database.js';
 import { runTask, stopTask, getTaskStatus, getAllRunningTasks } from '../services/ecs-manager.js';
 import {
-  createDistribution,
-  getDistributionStatus,
   disableDistribution,
-  deleteDistribution,
-  updateDistributionOrigin,
 } from '../services/cloudfront-manager.js';
+import {
+  getCodingLabALBConfig,
+  registerCodingInstance,
+  deregisterCodingInstance,
+  getCodingLabCloudFrontDomain,
+} from '../services/coding-lab-alb.js';
 
 const router = Router();
 
-// Helper to create CloudFront distribution for an instance
-async function ensureCloudFrontDistribution(instance: Instance, publicIp: string): Promise<void> {
-  console.log(`[CloudFront] Checking instance ${instance.id}: publicIp=${publicIp}, existing_cf=${instance.cloudfront_distribution_id}`);
+// Helper to register instance with shared ALB
+async function registerInstanceWithALB(instance: Instance, publicIp: string): Promise<void> {
+  console.log(`[ALB] Checking instance ${instance.id}: publicIp=${publicIp}, existing_tg=${instance.alb_target_group_arn}`);
 
   // Skip if no public IP
   if (!publicIp) {
     return;
   }
 
-  // If already has CloudFront, check status and update origin if IP changed
-  if (instance.cloudfront_distribution_id) {
-    try {
-      const status = await getDistributionStatus(instance.cloudfront_distribution_id);
-      if (status) {
-        // Check if IP has changed - need to update CloudFront origin
-        if (instance.public_ip && instance.public_ip !== publicIp) {
-          console.log(`[CloudFront] IP changed for ${instance.id}: ${instance.public_ip} -> ${publicIp}, updating origin...`);
-          await updateDistributionOrigin(instance.cloudfront_distribution_id, publicIp);
-          updateInstance(instance.id, {
-            public_ip: publicIp,
-            cloudfront_status: 'InProgress', // Will be deploying after update
-          });
-          instance.public_ip = publicIp;
-          instance.cloudfront_status = 'InProgress';
-        } else if (status.status !== instance.cloudfront_status) {
-          updateInstance(instance.id, {
-            cloudfront_status: status.status,
-          });
-          instance.cloudfront_status = status.status;
-        }
-      }
-    } catch (err) {
-      console.error(`Error checking/updating CloudFront for ${instance.id}:`, err);
+  // Already registered with ALB
+  if (instance.alb_target_group_arn && instance.alb_rule_arn) {
+    // Just update the public IP if changed
+    if (instance.public_ip !== publicIp) {
+      updateInstance(instance.id, { public_ip: publicIp });
+      instance.public_ip = publicIp;
     }
     return;
   }
 
-  // Create new CloudFront distribution
+  const albConfig = getCodingLabALBConfig();
+  if (!albConfig) {
+    console.log(`[ALB] ALB not configured - run setup first`);
+    // Fall back to direct IP access
+    updateInstance(instance.id, {
+      public_ip: publicIp,
+      vscode_url: `http://${publicIp}:8080`,
+      app_url: `http://${publicIp}:3000`,
+    });
+    return;
+  }
+
+  const vpcId = getConfig('vpc_id');
+  if (!vpcId) {
+    console.log(`[ALB] VPC ID not configured - run setup first`);
+    return;
+  }
+
   try {
-    console.log(`Creating CloudFront distribution for instance ${instance.id} with IP ${publicIp}`);
-    const distribution = await createDistribution(instance.id, publicIp);
+    console.log(`[ALB] Registering instance ${instance.id} with ALB`);
+    const result = await registerCodingInstance(
+      instance.id,
+      publicIp,
+      vpcId,
+      albConfig.listenerArn
+    );
+
+    // Build the VS Code URL using the shared CloudFront domain
+    const cloudfrontDomain = getCodingLabCloudFrontDomain();
+    const vscodeUrl = cloudfrontDomain
+      ? `https://${cloudfrontDomain}${result.accessPath}/`
+      : `http://${albConfig.albDnsName}${result.accessPath}/`;
 
     updateInstance(instance.id, {
-      cloudfront_distribution_id: distribution.distributionId,
-      cloudfront_domain: distribution.domainName,
-      cloudfront_status: distribution.status,
+      alb_target_group_arn: result.targetGroupArn,
+      alb_rule_arn: result.ruleArn,
+      alb_access_path: result.accessPath,
       public_ip: publicIp,
+      vscode_url: vscodeUrl,
+      app_url: `http://${publicIp}:3000`,
     });
 
-    instance.cloudfront_distribution_id = distribution.distributionId;
-    instance.cloudfront_domain = distribution.domainName;
-    instance.cloudfront_status = distribution.status;
+    instance.alb_target_group_arn = result.targetGroupArn;
+    instance.alb_rule_arn = result.ruleArn;
+    instance.alb_access_path = result.accessPath;
     instance.public_ip = publicIp;
+    instance.vscode_url = vscodeUrl;
+    instance.app_url = `http://${publicIp}:3000`;
 
-    console.log(`CloudFront distribution created: ${distribution.domainName}`);
+    console.log(`[ALB] Instance registered: ${vscodeUrl}`);
   } catch (err: any) {
-    console.error(`ERROR creating CloudFront distribution for ${instance.id}:`, err.message);
-    console.error(`Full error:`, JSON.stringify(err, null, 2));
-    // Don't fail the whole request, just log the error
-    // The instance will still work with direct IP access
+    console.error(`[ALB] Error registering instance ${instance.id}:`, err.message);
+    // Fall back to direct IP access
+    updateInstance(instance.id, {
+      public_ip: publicIp,
+      vscode_url: `http://${publicIp}:8080`,
+      app_url: `http://${publicIp}:3000`,
+    });
   }
 }
 
-// Helper to clean up CloudFront distribution
-async function cleanupCloudFront(instance: Instance): Promise<void> {
-  if (!instance.cloudfront_distribution_id) return;
+// Helper to clean up ALB registration (and legacy CloudFront if present)
+async function cleanupInstanceRouting(instance: Instance): Promise<void> {
+  // Clean up ALB resources
+  if (instance.alb_target_group_arn || instance.alb_rule_arn) {
+    try {
+      console.log(`[ALB] Deregistering instance ${instance.id} from ALB`);
+      await deregisterCodingInstance(
+        instance.alb_target_group_arn || '',
+        instance.alb_rule_arn || ''
+      );
+    } catch (err: any) {
+      console.error(`[ALB] Error deregistering instance ${instance.id}:`, err);
+    }
+  }
 
-  try {
-    console.log(`Disabling CloudFront distribution for instance ${instance.id}`);
-    await disableDistribution(instance.cloudfront_distribution_id);
-    // Note: Full deletion happens asynchronously after distribution is deployed
-    // We could set up a background job to clean these up later
-  } catch (err: any) {
-    console.error(`Error disabling CloudFront for ${instance.id}:`, err);
+  // Clean up legacy per-instance CloudFront if present (for backwards compatibility)
+  if (instance.cloudfront_distribution_id) {
+    try {
+      console.log(`[Legacy] Disabling CloudFront distribution for instance ${instance.id}`);
+      await disableDistribution(instance.cloudfront_distribution_id);
+    } catch (err: any) {
+      console.error(`[Legacy] Error disabling CloudFront for ${instance.id}:`, err);
+    }
   }
 }
 
@@ -111,38 +143,18 @@ router.get('/', async (req, res) => {
           if (taskInfo) {
             const newStatus = taskInfo.status.toLowerCase();
 
-            // Create CloudFront distribution if we have a public IP and instance is running
+            // Register with ALB if we have a public IP and instance is running
             if (taskInfo.publicIp && newStatus === 'running') {
-              await ensureCloudFrontDistribution(instance, taskInfo.publicIp);
+              await registerInstanceWithALB(instance, taskInfo.publicIp);
             }
 
-            // Use CloudFront URLs (HTTPS) if available - works even while status is "InProgress"
-            // CloudFront distributions are usable within 1-2 minutes of creation, no need to wait for "Deployed"
-            let vscodeUrl: string | null = null;
-            let appUrl: string | null = null;
-
-            if (instance.cloudfront_domain) {
-              // CloudFront URL available - use HTTPS for VS Code (works even during deployment)
-              vscodeUrl = `https://${instance.cloudfront_domain}`;
-              // CloudFront only proxies port 8080 (VS Code), so React app must use direct IP
-              appUrl = taskInfo.publicIp ? `http://${taskInfo.publicIp}:3000` : null;
-            } else if (taskInfo.publicIp) {
-              // Fall back to direct IP if CloudFront not yet created
-              vscodeUrl = `http://${taskInfo.publicIp}:8080`;
-              appUrl = `http://${taskInfo.publicIp}:3000`;
-            }
-
-            // Update if any field has changed
-            if (instance.status !== newStatus || instance.vscode_url !== vscodeUrl || instance.app_url !== appUrl) {
+            // Update status if changed (URLs are set by registerInstanceWithALB)
+            if (instance.status !== newStatus) {
               updateInstance(instance.id, {
                 status: newStatus,
-                vscode_url: vscodeUrl,
-                app_url: appUrl,
                 public_ip: taskInfo.publicIp || instance.public_ip,
               });
               instance.status = newStatus;
-              instance.vscode_url = vscodeUrl;
-              instance.app_url = appUrl;
               instance.public_ip = taskInfo.publicIp || instance.public_ip;
             }
           }
@@ -264,7 +276,7 @@ router.post('/stop-all', async (req, res) => {
         if (instance.task_arn) {
           await stopTask(instance.task_arn);
           // Clean up CloudFront distribution
-          await cleanupCloudFront(instance);
+          await cleanupInstanceRouting(instance);
           updateInstance(instance.id, { status: 'stopping' });
           results.push(instance.id);
         }
@@ -305,7 +317,7 @@ router.delete('/all', async (req, res) => {
           }
         }
         // Clean up CloudFront distribution
-        await cleanupCloudFront(instance);
+        await cleanupInstanceRouting(instance);
         deleteInstance(instance.id);
         results.push(instance.id);
       } catch (err: any) {
@@ -374,7 +386,7 @@ router.post('/:id/stop', async (req, res) => {
 
     await stopTask(instance.task_arn);
     // Clean up CloudFront distribution
-    await cleanupCloudFront(instance);
+    await cleanupInstanceRouting(instance);
     updateInstance(instance.id, { status: 'stopping' });
 
     res.json({ success: true, message: 'Stop signal sent' });
@@ -393,7 +405,7 @@ router.post('/:id/start', async (req, res) => {
     }
 
     // Clean up old CloudFront distribution if exists (IP will change)
-    await cleanupCloudFront(instance);
+    await cleanupInstanceRouting(instance);
 
     // Start new ECS task
     const taskInfo = await runTask(instance.id);
@@ -435,7 +447,7 @@ router.delete('/:id', async (req, res) => {
     }
 
     // Clean up CloudFront distribution
-    await cleanupCloudFront(instance);
+    await cleanupInstanceRouting(instance);
 
     // Delete local record
     deleteInstance(instance.id);

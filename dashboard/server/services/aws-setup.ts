@@ -41,6 +41,7 @@ import { promisify } from 'util';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { setConfig, getConfig } from '../db/database.js';
+import { ensureCodingLabALB, ensureCodingLabCloudFront, saveCodingLabALBConfig } from './coding-lab-alb.js';
 
 const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
@@ -113,6 +114,51 @@ const CLOUDWATCH_LOGS_POLICY = JSON.stringify({
       'logs:DescribeLogStreams',
     ],
     Resource: ['arn:aws:logs:*:*:log-group:/ecs/*'],
+  }],
+});
+
+// ELB permissions for creating/managing shared ALB
+const ELB_POLICY = JSON.stringify({
+  Version: '2012-10-17',
+  Statement: [{
+    Effect: 'Allow',
+    Action: [
+      'elasticloadbalancing:CreateLoadBalancer',
+      'elasticloadbalancing:CreateTargetGroup',
+      'elasticloadbalancing:CreateListener',
+      'elasticloadbalancing:CreateRule',
+      'elasticloadbalancing:DeleteLoadBalancer',
+      'elasticloadbalancing:DeleteTargetGroup',
+      'elasticloadbalancing:DeleteListener',
+      'elasticloadbalancing:DeleteRule',
+      'elasticloadbalancing:RegisterTargets',
+      'elasticloadbalancing:DeregisterTargets',
+      'elasticloadbalancing:DescribeLoadBalancers',
+      'elasticloadbalancing:DescribeTargetGroups',
+      'elasticloadbalancing:DescribeListeners',
+      'elasticloadbalancing:DescribeRules',
+      'elasticloadbalancing:DescribeTags',
+      'elasticloadbalancing:ModifyTargetGroupAttributes',
+      'elasticloadbalancing:AddTags',
+    ],
+    Resource: '*',
+  }],
+});
+
+// CloudFront permissions for creating/managing shared distribution
+const CLOUDFRONT_POLICY = JSON.stringify({
+  Version: '2012-10-17',
+  Statement: [{
+    Effect: 'Allow',
+    Action: [
+      'cloudfront:CreateDistribution',
+      'cloudfront:GetDistribution',
+      'cloudfront:UpdateDistribution',
+      'cloudfront:DeleteDistribution',
+      'cloudfront:ListDistributions',
+      'cloudfront:TagResource',
+    ],
+    Resource: '*',
   }],
 });
 
@@ -269,6 +315,29 @@ export async function runFullSetup(
         PolicyDocument: CLOUDWATCH_LOGS_POLICY,
       }));
       report({ step: 'create_execution_role', status: 'completed', message: 'Created execution role', resourceId: executionRoleArn });
+    }
+
+    // Add ELB and CloudFront permissions to the dashboard's task role (ecsTaskRole)
+    // This allows the dashboard to create/manage the shared ALB and CloudFront
+    report({ step: 'add_alb_permissions', status: 'in_progress', message: 'Adding ALB/CloudFront permissions to dashboard role...' });
+    try {
+      // Add ELB permissions
+      await clients.iam.send(new PutRolePolicyCommand({
+        RoleName: 'ecsTaskRole',
+        PolicyName: 'ELBAccess',
+        PolicyDocument: ELB_POLICY,
+      }));
+      // Add CloudFront permissions
+      await clients.iam.send(new PutRolePolicyCommand({
+        RoleName: 'ecsTaskRole',
+        PolicyName: 'CloudFrontAccess',
+        PolicyDocument: CLOUDFRONT_POLICY,
+      }));
+      report({ step: 'add_alb_permissions', status: 'completed', message: 'Added ALB/CloudFront permissions to ecsTaskRole' });
+    } catch (permErr: any) {
+      // Role might not exist yet if this is first setup, or permissions might already be there
+      console.log('Note: Could not add ALB/CloudFront permissions to ecsTaskRole:', permErr.message);
+      report({ step: 'add_alb_permissions', status: 'skipped', message: 'Could not add permissions (role may not exist or already configured)' });
     }
 
     // Step 5: Create task role
@@ -487,6 +556,35 @@ phases:
       report({ step: 'create_codebuild_project', status: 'completed', message: 'Created CodeBuild project', resourceId: codebuildProjectName });
     }
 
+    // Step 11: Create shared ALB for coding instances
+    report({ step: 'create_shared_alb', status: 'in_progress', message: 'Creating shared ALB for coding instances...' });
+    let albConfig;
+    try {
+      albConfig = await ensureCodingLabALB(vpcId, subnetIds.split(','), securityGroupId);
+      report({ step: 'create_shared_alb', status: 'completed', message: `ALB created: ${albConfig.albDnsName}`, resourceId: albConfig.albArn });
+    } catch (albErr: any) {
+      report({ step: 'create_shared_alb', status: 'failed', message: `Failed to create ALB: ${albErr.message}` });
+      throw new Error(`Failed to create shared ALB: ${albErr.message}`);
+    }
+
+    // Step 12: Create shared CloudFront distribution
+    report({ step: 'create_shared_cloudfront', status: 'in_progress', message: 'Creating shared CloudFront distribution...' });
+    let cfConfig;
+    try {
+      cfConfig = await ensureCodingLabCloudFront(albConfig.albDnsName);
+      report({ step: 'create_shared_cloudfront', status: 'completed', message: `CloudFront: ${cfConfig.domain}`, resourceId: cfConfig.distributionId });
+    } catch (cfErr: any) {
+      report({ step: 'create_shared_cloudfront', status: 'failed', message: `Failed to create CloudFront: ${cfErr.message}` });
+      throw new Error(`Failed to create shared CloudFront: ${cfErr.message}`);
+    }
+
+    // Save ALB/CloudFront config
+    saveCodingLabALBConfig({
+      ...albConfig,
+      cloudfrontDistributionId: cfConfig.distributionId,
+      cloudfrontDomain: cfConfig.domain,
+    });
+
     // Save config
     const config = {
       cluster_name: clusterName,
@@ -526,11 +624,15 @@ export async function checkSetupStatus(): Promise<{
   ecrImageExists: boolean;
   imageUri: string | null;
   availableImages: AIExtension[];
+  sharedAlbConfigured: boolean;
+  cloudfrontDomain: string | null;
 }> {
   const missing: string[] = [];
   let ecrImageExists = false;
   let imageUri: string | null = null;
   const availableImages: AIExtension[] = [];
+  let sharedAlbConfigured = false;
+  let cloudfrontDomain: string | null = null;
 
   try {
     const clients = getClients();
@@ -640,9 +742,20 @@ export async function checkSetupStatus(): Promise<{
       missing.push('CodeBuild project');
     }
 
-    return { configured: missing.length === 0, missing, ecrImageExists, imageUri, availableImages };
+    // Check shared ALB/CloudFront configuration
+    const albArn = getConfig('coding_lab_alb_arn');
+    const listenerArn = getConfig('coding_lab_listener_arn');
+    cloudfrontDomain = getConfig('coding_lab_cloudfront_domain') || null;
+
+    if (albArn && listenerArn && cloudfrontDomain) {
+      sharedAlbConfigured = true;
+    } else {
+      missing.push('Shared ALB/CloudFront');
+    }
+
+    return { configured: missing.length === 0, missing, ecrImageExists, imageUri, availableImages, sharedAlbConfigured, cloudfrontDomain };
   } catch (err: any) {
-    return { configured: false, missing: ['Unable to check: ' + err.message], ecrImageExists: false, imageUri: null, availableImages: [] };
+    return { configured: false, missing: ['Unable to check: ' + err.message], ecrImageExists: false, imageUri: null, availableImages: [], sharedAlbConfigured: false, cloudfrontDomain: null };
   }
 }
 

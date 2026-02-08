@@ -209,7 +209,15 @@ export const api = {
   // Setup
   getSetupStatus: () =>
     // To add new extensions, update availableImages type: ('continue' | 'cline' | 'roo-code')[]
-    fetchJson<{ configured: boolean; missing: string[]; ecrImageExists: boolean; imageUri: string | null; availableImages?: ('continue')[] }>('/setup/status'),
+    fetchJson<{
+      configured: boolean;
+      missing: string[];
+      ecrImageExists: boolean;
+      imageUri: string | null;
+      availableImages?: ('continue')[];
+      sharedAlbConfigured: boolean;
+      cloudfrontDomain: string | null;
+    }>('/setup/status'),
 
   runSetup: () =>
     fetchJson<{
@@ -390,4 +398,5 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ extension }),
     }),
+
 }

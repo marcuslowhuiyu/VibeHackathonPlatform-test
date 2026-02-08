@@ -21,6 +21,7 @@ import {
   Save,
   RotateCcw,
   Info,
+  Globe,
 } from 'lucide-react'
 import { api } from '../lib/api'
 
@@ -37,12 +38,15 @@ const STEP_LABELS: Record<string, { label: string; icon: React.ReactNode }> = {
   get_subnets: { label: 'Find Subnets', icon: <Server className="w-4 h-4" /> },
   create_security_group: { label: 'Create Security Group', icon: <Shield className="w-4 h-4" /> },
   create_execution_role: { label: 'Create ECS Execution Role', icon: <Shield className="w-4 h-4" /> },
+  add_alb_permissions: { label: 'Add ALB/CloudFront Permissions', icon: <Shield className="w-4 h-4" /> },
   create_task_role: { label: 'Create Task Role (Bedrock)', icon: <Shield className="w-4 h-4" /> },
   create_ecr_repo: { label: 'Create ECR Repository', icon: <Database className="w-4 h-4" /> },
   create_cluster: { label: 'Create ECS Cluster', icon: <Box className="w-4 h-4" /> },
   register_task_definition: { label: 'Register Task Definition', icon: <Box className="w-4 h-4" /> },
   create_codebuild_role: { label: 'Create CodeBuild Role', icon: <Shield className="w-4 h-4" /> },
   create_codebuild_project: { label: 'Create CodeBuild Project', icon: <Terminal className="w-4 h-4" /> },
+  create_shared_alb: { label: 'Create Shared ALB', icon: <Globe className="w-4 h-4" /> },
+  create_shared_cloudfront: { label: 'Create Shared CloudFront', icon: <Globe className="w-4 h-4" /> },
   save_config: { label: 'Save Configuration', icon: <CheckCircle className="w-4 h-4" /> },
 }
 
@@ -884,7 +888,7 @@ export default function SetupGuide() {
             Checking setup status...
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div
               className={`p-4 rounded-lg border ${
                 status?.configured
@@ -903,7 +907,29 @@ export default function SetupGuide() {
               <p className="text-sm text-gray-400">
                 {status?.configured
                   ? 'All resources configured'
-                  : `Missing: ${status?.missing?.join(', ') || 'Unknown'}`}
+                  : `Missing: ${status?.missing?.filter(m => m !== 'Shared ALB/CloudFront').join(', ') || 'Unknown'}`}
+              </p>
+            </div>
+
+            <div
+              className={`p-4 rounded-lg border ${
+                status?.sharedAlbConfigured
+                  ? 'bg-green-900/20 border-green-600'
+                  : 'bg-yellow-900/20 border-yellow-600'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                {status?.sharedAlbConfigured ? (
+                  <CheckCircle className="w-5 h-5 text-green-400" />
+                ) : (
+                  <AlertTriangle className="w-5 h-5 text-yellow-400" />
+                )}
+                <span className="font-medium">ALB & CloudFront</span>
+              </div>
+              <p className="text-sm text-gray-400">
+                {status?.sharedAlbConfigured
+                  ? 'Shared routing configured'
+                  : 'Run setup to configure'}
               </p>
             </div>
 
@@ -932,14 +958,27 @@ export default function SetupGuide() {
         )}
 
         {allConfigured && (
-          <div className="mt-4 bg-green-900/30 border border-green-600 rounded-lg p-4 flex items-center gap-3">
-            <CheckCircle className="w-6 h-6 text-green-400" />
-            <div>
-              <p className="text-green-400 font-medium">Setup Complete!</p>
-              <p className="text-sm text-gray-400">
-                You can now spin up instances from the Instances tab.
-              </p>
+          <div className="mt-4 bg-green-900/30 border border-green-600 rounded-lg p-4">
+            <div className="flex items-center gap-3 mb-2">
+              <CheckCircle className="w-6 h-6 text-green-400" />
+              <div>
+                <p className="text-green-400 font-medium">Setup Complete!</p>
+                <p className="text-sm text-gray-400">
+                  You can now spin up instances from the Instances tab.
+                </p>
+              </div>
             </div>
+            {status?.cloudfrontDomain && (
+              <div className="mt-3 pt-3 border-t border-green-600/30">
+                <div className="flex items-center gap-2 text-sm">
+                  <Globe className="w-4 h-4 text-blue-400" />
+                  <span className="text-gray-400">Instances URL:</span>
+                  <code className="text-blue-300 bg-gray-800 px-2 py-0.5 rounded">
+                    https://{status.cloudfrontDomain}/i/&#123;instance-id&#125;/
+                  </code>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

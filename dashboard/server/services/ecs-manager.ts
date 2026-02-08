@@ -157,7 +157,7 @@ export async function runTask(instanceId: string, extension: string = 'continue'
           image: imageUri,
           environment: [
             ...(containerDef.environment || []).filter(
-              e => e.name !== 'INSTANCE_ID' && e.name !== 'AWS_REGION' && e.name !== 'AI_EXTENSION' && e.name !== 'INSTANCE_MODE'
+              e => e.name !== 'INSTANCE_ID' && e.name !== 'AWS_REGION' && e.name !== 'AI_EXTENSION' && e.name !== 'INSTANCE_MODE' && e.name !== 'BEDROCK_MODEL_ID'
             ),
             { name: 'INSTANCE_ID', value: instanceId },
             { name: 'AWS_REGION', value: AWS_REGION },
@@ -165,6 +165,7 @@ export async function runTask(instanceId: string, extension: string = 'continue'
             ...(extension === 'vibe' || extension === 'vibe-pro' ? [
               { name: 'INSTANCE_MODE', value: extension === 'vibe-pro' ? 'vibe-pro' : 'vibe' },
             ] : []),
+            { name: 'BEDROCK_MODEL_ID', value: process.env.BEDROCK_MODEL_ID || 'anthropic.claude-sonnet-4-20250514-v1:0' },
           ],
         },
       ],

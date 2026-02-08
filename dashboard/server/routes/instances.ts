@@ -350,18 +350,22 @@ router.get('/:id', async (req, res) => {
     if (instance.task_arn) {
       const taskInfo = await getTaskStatus(instance.task_arn);
       if (taskInfo) {
-        const vscodeUrl = taskInfo.publicIp ? `http://${taskInfo.publicIp}:8080` : null;
-        const appUrl = taskInfo.publicIp ? `http://${taskInfo.publicIp}:3000` : null;
+        const newStatus = taskInfo.status.toLowerCase();
 
-        updateInstance(instance.id, {
-          status: taskInfo.status.toLowerCase(),
-          vscode_url: vscodeUrl,
-          app_url: appUrl,
-        });
+        // Register with ALB if we have a public IP and instance is running
+        if (taskInfo.publicIp && newStatus === 'running') {
+          await registerInstanceWithALB(instance, taskInfo.publicIp);
+        }
 
-        instance.status = taskInfo.status.toLowerCase();
-        instance.vscode_url = vscodeUrl;
-        instance.app_url = appUrl;
+        // Update status if changed
+        if (instance.status !== newStatus) {
+          updateInstance(instance.id, {
+            status: newStatus,
+            public_ip: taskInfo.publicIp || instance.public_ip,
+          });
+          instance.status = newStatus;
+          instance.public_ip = taskInfo.publicIp || instance.public_ip;
+        }
       }
     }
 
@@ -549,10 +553,16 @@ router.post('/orphaned/import', async (req, res) => {
     updateInstance(instanceId, {
       task_arn: task_arn,
       status: taskInfo.status.toLowerCase(),
-      vscode_url: taskInfo.publicIp ? `http://${taskInfo.publicIp}:8080` : null,
-      app_url: taskInfo.publicIp ? `http://${taskInfo.publicIp}:3000` : null,
       public_ip: taskInfo.publicIp,
     });
+
+    // Register with ALB if running with a public IP
+    if (taskInfo.publicIp && taskInfo.status.toLowerCase() === 'running') {
+      const updatedInstance = getInstanceById(instanceId);
+      if (updatedInstance) {
+        await registerInstanceWithALB(updatedInstance, taskInfo.publicIp);
+      }
+    }
 
     res.json({
       success: true,

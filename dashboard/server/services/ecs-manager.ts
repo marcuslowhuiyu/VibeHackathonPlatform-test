@@ -108,7 +108,13 @@ export async function runTask(instanceId: string, extension: string = 'continue'
   }
 
   // Determine the image tag based on extension
-  const imageTag = extension === 'cline' ? 'cline' : 'continue';
+  const imageTagMap: Record<string, string> = {
+    continue: 'continue',
+    cline: 'cline',
+    vibe: 'vibe',
+    'vibe-pro': 'vibe-pro',
+  };
+  const imageTag = imageTagMap[extension] || 'continue';
 
   // Build the new image URI
   let imageUri: string;
@@ -151,11 +157,14 @@ export async function runTask(instanceId: string, extension: string = 'continue'
           image: imageUri,
           environment: [
             ...(containerDef.environment || []).filter(
-              e => e.name !== 'INSTANCE_ID' && e.name !== 'AWS_REGION' && e.name !== 'AI_EXTENSION'
+              e => e.name !== 'INSTANCE_ID' && e.name !== 'AWS_REGION' && e.name !== 'AI_EXTENSION' && e.name !== 'INSTANCE_MODE'
             ),
             { name: 'INSTANCE_ID', value: instanceId },
             { name: 'AWS_REGION', value: AWS_REGION },
             { name: 'AI_EXTENSION', value: extension },
+            ...(extension === 'vibe' || extension === 'vibe-pro' ? [
+              { name: 'INSTANCE_MODE', value: extension === 'vibe-pro' ? 'vibe-pro' : 'vibe' },
+            ] : []),
           ],
         },
       ],

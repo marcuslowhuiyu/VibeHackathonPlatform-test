@@ -56,14 +56,14 @@ phases:
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
   build:
     commands:
-      - echo "=== Building Continue extension from cline-setup/ ==="
-      - cd cline-setup
+      - echo "=== Building Continue extension from continue-instance/ ==="
+      - cd continue-instance
       - docker build -t vibe-coding-lab:continue .
       - docker tag vibe-coding-lab:continue $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
       - docker tag vibe-coding-lab:continue $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
       - cd ..
-      - echo "=== Building Cline extension from cline-ai/ ==="
-      - cd cline-ai
+      - echo "=== Building Cline extension from cline-instance/ ==="
+      - cd cline-instance
       - docker build -t vibe-coding-lab:cline .
       - docker tag vibe-coding-lab:cline $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
       - cd ..

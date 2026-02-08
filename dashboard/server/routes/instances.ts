@@ -117,6 +117,16 @@ async function cleanupInstanceRouting(instance: Instance): Promise<void> {
     } catch (err: any) {
       console.error(`[ALB] Error deregistering instance ${instance.id}:`, err);
     }
+
+    // Clear ALB fields so registerInstanceWithALB will re-register on next start
+    updateInstance(instance.id, {
+      alb_target_group_arn: undefined,
+      alb_rule_arn: undefined,
+      alb_access_path: undefined,
+    });
+    instance.alb_target_group_arn = undefined;
+    instance.alb_rule_arn = undefined;
+    instance.alb_access_path = undefined;
   }
 
   // Clean up legacy per-instance CloudFront if present (for backwards compatibility)

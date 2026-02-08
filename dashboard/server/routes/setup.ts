@@ -20,10 +20,10 @@ const __dirname = dirname(__filename);
 const PROJECT_ROOT = join(__dirname, '..', '..', '..');
 
 // Use EFS for editable files if DATA_DIR is set (production), otherwise use local
-const EFS_CLINE_DIR = process.env.DATA_DIR ? join(process.env.DATA_DIR, '..', 'cline-setup') : null;
-const LOCAL_CLINE_DIR = join(PROJECT_ROOT, 'cline-setup');
+const EFS_CLINE_DIR = process.env.DATA_DIR ? join(process.env.DATA_DIR, '..', 'continue-instance') : null;
+const LOCAL_CLINE_DIR = join(PROJECT_ROOT, 'continue-instance');
 
-// Initialize EFS cline-setup directory with default files if needed
+// Initialize EFS continue-instance directory with default files if needed
 function initEfsClineSetup() {
   if (!EFS_CLINE_DIR) return;
 
@@ -44,7 +44,7 @@ function initEfsClineSetup() {
       }
     }
   } catch (err) {
-    console.error('Failed to init EFS cline-setup:', err);
+    console.error('Failed to init EFS continue-instance:', err);
   }
 }
 

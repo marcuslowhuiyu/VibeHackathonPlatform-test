@@ -13,6 +13,7 @@ on:
       - 'dashboard/**'
       - 'continue-instance/**'
       - 'cline-instance/**'
+      - 'vibe-instance/**'
       - '.github/workflows/deploy-dashboard.yml'
   workflow_dispatch:
     inputs:
@@ -174,6 +175,13 @@ jobs:
             echo "cline_changed=false" >> $GITHUB_OUTPUT
           fi
 
+          # Check if Vibe setup changed
+          if git diff --name-only HEAD~1 HEAD | grep -q "^vibe-instance/"; then
+            echo "vibe_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "vibe_changed=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build and push Continue image
         if: steps.changes.outputs.continue_changed == 'true' || github.event_name == 'workflow_dispatch'
         uses: docker/build-push-action@v5
@@ -194,6 +202,18 @@ jobs:
           push: true
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:cline
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Vibe image
+        if: steps.changes.outputs.vibe_changed == 'true' || github.event_name == 'workflow_dispatch'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./vibe-instance
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:vibe
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:vibe-pro
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

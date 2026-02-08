@@ -4,6 +4,13 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { runFullSetup, checkSetupStatus, getDockerPushCommands, checkDockerAvailable, buildAndPushImage } from '../services/aws-setup.js';
 import * as codebuild from '../services/codebuild-manager.js';
+import {
+  ensureCodingLabALB,
+  ensureCodingLabCloudFront,
+  getCodingLabALBConfig,
+  saveCodingLabALBConfig,
+} from '../services/coding-lab-alb.js';
+import { getConfig } from '../db/database.js';
 
 const router = Router();
 
@@ -284,6 +291,86 @@ router.get('/codebuild/build/:buildId', async (req, res) => {
   try {
     const status = await codebuild.getBuildStatus(req.params.buildId);
     res.json(status);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// Shared ALB/CloudFront Setup - Single CloudFront for all coding instances
+// ==========================================
+
+// Get shared ALB/CloudFront status
+router.get('/shared-alb/status', async (req, res) => {
+  try {
+    const config = getCodingLabALBConfig();
+    res.json({
+      configured: !!(config?.albArn && config?.listenerArn),
+      ...config,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Set up shared ALB and CloudFront for coding instances
+router.post('/shared-alb/setup', async (req, res) => {
+  try {
+    // Check prerequisites
+    const vpcId = getConfig('vpc_id');
+    const subnetIds = getConfig('subnet_ids')?.split(',').filter(Boolean);
+    const securityGroupId = getConfig('security_group_id');
+
+    if (!vpcId || !subnetIds || subnetIds.length === 0 || !securityGroupId) {
+      return res.status(400).json({
+        error: 'Prerequisites not met. Please run the automated AWS setup first.',
+        missing: {
+          vpc_id: !vpcId,
+          subnet_ids: !subnetIds || subnetIds.length === 0,
+          security_group_id: !securityGroupId,
+        },
+      });
+    }
+
+    const steps: { step: string; status: string; message?: string }[] = [];
+
+    // Step 1: Create or get existing ALB
+    steps.push({ step: 'Creating shared ALB', status: 'in_progress' });
+    const albConfig = await ensureCodingLabALB(vpcId, subnetIds, securityGroupId);
+    steps[steps.length - 1] = {
+      step: 'Creating shared ALB',
+      status: 'completed',
+      message: `ALB: ${albConfig.albDnsName}`,
+    };
+
+    // Step 2: Create or get existing CloudFront distribution
+    steps.push({ step: 'Creating shared CloudFront', status: 'in_progress' });
+    const cfConfig = await ensureCodingLabCloudFront(albConfig.albDnsName);
+    steps[steps.length - 1] = {
+      step: 'Creating shared CloudFront',
+      status: 'completed',
+      message: `CloudFront: ${cfConfig.domain}`,
+    };
+
+    // Save configuration
+    saveCodingLabALBConfig({
+      ...albConfig,
+      cloudfrontDistributionId: cfConfig.distributionId,
+      cloudfrontDomain: cfConfig.domain,
+    });
+
+    res.json({
+      success: true,
+      steps,
+      config: {
+        albArn: albConfig.albArn,
+        albDnsName: albConfig.albDnsName,
+        listenerArn: albConfig.listenerArn,
+        cloudfrontDistributionId: cfConfig.distributionId,
+        cloudfrontDomain: cfConfig.domain,
+      },
+      message: `Shared ALB and CloudFront setup complete. All new instances will use: https://${cfConfig.domain}/i/{instance-id}/`,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

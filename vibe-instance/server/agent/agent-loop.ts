@@ -14,7 +14,14 @@ import { executeTool, TOOL_DEFINITIONS } from "./tools.js";
 // Constants
 // ---------------------------------------------------------------------------
 
-const MODEL_ID = process.env.BEDROCK_MODEL_ID || "us.anthropic.claude-sonnet-4-20250514-v1:0";
+function getDefaultModelId(): string {
+  const region = process.env.AWS_REGION || '';
+  let prefix = 'us'; // default
+  if (region.startsWith('ap-')) prefix = 'apac';
+  else if (region.startsWith('eu-')) prefix = 'eu';
+  return `${prefix}.anthropic.claude-sonnet-4-20250514-v1:0`;
+}
+const MODEL_ID = process.env.BEDROCK_MODEL_ID || getDefaultModelId();
 const MAX_ITERATIONS = 25; // safety limit to prevent infinite loops
 
 // ---------------------------------------------------------------------------

@@ -173,7 +173,11 @@ async function main(): Promise<void> {
   const agentLoop = new AgentLoop(INSTANCE_MODE, repoMap);
 
   // Verify Bedrock connectivity
-  const bedrockModelId = process.env.BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+  const region = process.env.AWS_REGION || '';
+  let inferencePrefix = 'us';
+  if (region.startsWith('ap-')) inferencePrefix = 'apac';
+  else if (region.startsWith('eu-')) inferencePrefix = 'eu';
+  const bedrockModelId = process.env.BEDROCK_MODEL_ID || `${inferencePrefix}.anthropic.claude-sonnet-4-20250514-v1:0`;
   console.log(`Checking Bedrock connectivity (model: ${bedrockModelId}, region: ${process.env.AWS_REGION || 'default'})...`);
   try {
     const { BedrockRuntimeClient, ConverseCommand } = await import('@aws-sdk/client-bedrock-runtime');

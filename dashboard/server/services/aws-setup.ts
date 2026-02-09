@@ -99,7 +99,10 @@ const BEDROCK_POLICY = JSON.stringify({
       'bedrock:InvokeModel',
       'bedrock:InvokeModelWithResponseStream',
     ],
-    Resource: ['arn:aws:bedrock:*::foundation-model/anthropic.claude-*'],
+    Resource: [
+      'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
+      'arn:aws:bedrock:*:*:inference-profile/*anthropic.claude-*',
+    ],
   }],
 });
 
@@ -346,7 +349,13 @@ export async function runFullSetup(
     try {
       const existingRole = await clients.iam.send(new GetRoleCommand({ RoleName: 'vibeTaskRole' }));
       taskRoleArn = existingRole.Role!.Arn!;
-      report({ step: 'create_task_role', status: 'skipped', message: 'Task role already exists', resourceId: taskRoleArn });
+      // Always update the Bedrock policy to ensure inference-profile access
+      await clients.iam.send(new PutRolePolicyCommand({
+        RoleName: 'vibeTaskRole',
+        PolicyName: 'BedrockAccess',
+        PolicyDocument: BEDROCK_POLICY,
+      }));
+      report({ step: 'create_task_role', status: 'skipped', message: 'Task role already exists (policy updated)', resourceId: taskRoleArn });
     } catch {
       const roleResponse = await clients.iam.send(new CreateRoleCommand({
         RoleName: 'vibeTaskRole',

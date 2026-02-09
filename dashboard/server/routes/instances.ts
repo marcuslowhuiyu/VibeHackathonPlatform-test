@@ -35,10 +35,25 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string): Pr
 
   // Already registered with ALB
   if (instance.alb_target_group_arn && instance.alb_rule_arn) {
-    // Just update the public IP if changed
+    const updates: Partial<Instance> = {};
+
+    // Update public IP if changed
     if (instance.public_ip !== publicIp) {
-      updateInstance(instance.id, { public_ip: publicIp });
+      updates.public_ip = publicIp;
       instance.public_ip = publicIp;
+    }
+
+    // Upgrade URL to HTTPS if CloudFront is now available but URL is still HTTP
+    const cloudfrontDomain = getCodingLabCloudFrontDomain();
+    if (cloudfrontDomain && instance.vscode_url && !instance.vscode_url.startsWith('https://')) {
+      const accessPath = instance.alb_access_path || `/i/${instance.id}`;
+      const httpsUrl = `https://${cloudfrontDomain}${accessPath}/`;
+      updates.vscode_url = httpsUrl;
+      instance.vscode_url = httpsUrl;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      updateInstance(instance.id, updates);
     }
     return;
   }

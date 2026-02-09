@@ -43,10 +43,20 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string): Pr
       instance.public_ip = publicIp;
     }
 
-    // Upgrade URL to HTTPS if CloudFront is now available but URL is still HTTP
+    // Reconstruct URL if missing, or upgrade to HTTPS if CloudFront is now available
     const cloudfrontDomain = getCodingLabCloudFrontDomain();
-    if (cloudfrontDomain && instance.vscode_url && !instance.vscode_url.startsWith('https://')) {
-      const accessPath = instance.alb_access_path || `/i/${instance.id}`;
+    const accessPath = instance.alb_access_path || `/i/${instance.id}`;
+    if (!instance.vscode_url) {
+      // URL is null despite being registered - reconstruct it
+      const albConfig = getCodingLabALBConfig();
+      const url = cloudfrontDomain
+        ? `https://${cloudfrontDomain}${accessPath}/`
+        : albConfig
+          ? `http://${albConfig.albDnsName}${accessPath}/`
+          : `http://${publicIp}:8080`;
+      updates.vscode_url = url;
+      instance.vscode_url = url;
+    } else if (cloudfrontDomain && !instance.vscode_url.startsWith('https://')) {
       const httpsUrl = `https://${cloudfrontDomain}${accessPath}/`;
       updates.vscode_url = httpsUrl;
       instance.vscode_url = httpsUrl;
@@ -72,7 +82,12 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string): Pr
 
   const vpcId = getConfig('vpc_id');
   if (!vpcId) {
-    console.log(`[ALB] VPC ID not configured - run setup first`);
+    console.log(`[ALB] VPC ID not configured - falling back to direct IP access`);
+    updateInstance(instance.id, {
+      public_ip: publicIp,
+      vscode_url: `http://${publicIp}:8080`,
+      app_url: `http://${publicIp}:3000`,
+    });
     return;
   }
 
@@ -436,8 +451,8 @@ router.post('/:id/start', async (req, res) => {
     // Clean up old CloudFront distribution if exists (IP will change)
     await cleanupInstanceRouting(instance);
 
-    // Start new ECS task
-    const taskInfo = await runTask(instance.id);
+    // Start new ECS task with the correct extension
+    const taskInfo = await runTask(instance.id, instance.ai_extension || 'continue');
 
     updateInstance(instance.id, {
       task_arn: taskInfo.taskArn,

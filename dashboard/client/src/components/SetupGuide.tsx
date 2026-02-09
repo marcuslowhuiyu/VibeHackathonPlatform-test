@@ -978,9 +978,14 @@ export default function SetupGuide() {
                 <div className="flex items-center gap-2 text-sm">
                   <Globe className="w-4 h-4 text-blue-400" />
                   <span className="text-gray-400">Instances URL:</span>
-                  <code className="text-blue-300 bg-gray-800 px-2 py-0.5 rounded">
+                  <a
+                    href={`https://${status.cloudfrontDomain}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-300 bg-gray-800 px-2 py-0.5 rounded hover:text-blue-200 hover:underline"
+                  >
                     https://{status.cloudfrontDomain}/i/&#123;instance-id&#125;/
-                  </code>
+                  </a>
                 </div>
               </div>
             )}

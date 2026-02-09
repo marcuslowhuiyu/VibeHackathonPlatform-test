@@ -702,6 +702,94 @@ jobs:
           echo "  Target Group: $TG_NAME"
           echo "========================================"
 
+      - name: Setup CloudFront HTTPS for dashboard
+        id: cloudfront
+        run: |
+          ENVIRONMENT_NAME="${{ needs.build.outputs.environment_name }}"
+          ALB_DNS="${{ steps.env-setup.outputs.alb_dns }}"
+          CF_COMMENT="Vibe Dashboard - ${ENVIRONMENT_NAME}"
+
+          echo "Checking for existing CloudFront distribution: ${CF_COMMENT}"
+
+          # List all distributions and find one matching our comment tag
+          CF_DOMAIN=""
+          CF_ID=""
+          DIST_LIST=$(aws cloudfront list-distributions --query "DistributionList.Items[?Comment=='${CF_COMMENT}'].[Id,DomainName,Status]" --output text 2>/dev/null || echo "")
+
+          if [ -n "$DIST_LIST" ] && [ "$DIST_LIST" != "None" ]; then
+            CF_ID=$(echo "$DIST_LIST" | head -1 | awk '{print $1}')
+            CF_DOMAIN=$(echo "$DIST_LIST" | head -1 | awk '{print $2}')
+            CF_STATUS=$(echo "$DIST_LIST" | head -1 | awk '{print $3}')
+            echo "Found existing CloudFront distribution: $CF_ID ($CF_DOMAIN) - Status: $CF_STATUS"
+          fi
+
+          if [ -z "$CF_ID" ]; then
+            echo "No existing distribution found. Creating CloudFront distribution for ALB: $ALB_DNS"
+
+            CALLER_REF="vibe-dashboard-${ENVIRONMENT_NAME}-$(date +%s)"
+
+            CF_OUTPUT=$(aws cloudfront create-distribution \
+              --distribution-config "{
+                \"CallerReference\": \"${CALLER_REF}\",
+                \"Comment\": \"${CF_COMMENT}\",
+                \"Enabled\": true,
+                \"Origins\": {
+                  \"Quantity\": 1,
+                  \"Items\": [{
+                    \"Id\": \"vibe-dashboard-alb\",
+                    \"DomainName\": \"${ALB_DNS}\",
+                    \"CustomOriginConfig\": {
+                      \"HTTPPort\": 80,
+                      \"HTTPSPort\": 443,
+                      \"OriginProtocolPolicy\": \"http-only\",
+                      \"OriginSslProtocols\": { \"Quantity\": 1, \"Items\": [\"TLSv1.2\"] },
+                      \"OriginReadTimeout\": 60,
+                      \"OriginKeepaliveTimeout\": 60
+                    }
+                  }]
+                },
+                \"DefaultCacheBehavior\": {
+                  \"TargetOriginId\": \"vibe-dashboard-alb\",
+                  \"ViewerProtocolPolicy\": \"redirect-to-https\",
+                  \"AllowedMethods\": {
+                    \"Quantity\": 7,
+                    \"Items\": [\"GET\", \"HEAD\", \"OPTIONS\", \"PUT\", \"POST\", \"PATCH\", \"DELETE\"],
+                    \"CachedMethods\": { \"Quantity\": 2, \"Items\": [\"GET\", \"HEAD\"] }
+                  },
+                  \"CachePolicyId\": \"4135ea2d-6df8-44a3-9df3-4b5a84be39ad\",
+                  \"OriginRequestPolicyId\": \"216adef6-5c7f-47e4-b989-5492eafa07d3\",
+                  \"Compress\": true
+                },
+                \"PriceClass\": \"PriceClass_100\",
+                \"ViewerCertificate\": { \"CloudFrontDefaultCertificate\": true },
+                \"HttpVersion\": \"http2and3\",
+                \"IsIPV6Enabled\": true
+              }" \
+              --query 'Distribution.[Id,DomainName]' --output text 2>&1)
+
+            if [ $? -eq 0 ]; then
+              CF_ID=$(echo "$CF_OUTPUT" | awk '{print $1}')
+              CF_DOMAIN=$(echo "$CF_OUTPUT" | awk '{print $2}')
+              echo "Created CloudFront distribution: $CF_ID ($CF_DOMAIN)"
+            else
+              echo "WARNING: Failed to create CloudFront distribution: $CF_OUTPUT"
+              echo "Falling back to ALB direct access (HTTP)"
+            fi
+          fi
+
+          echo "cloudfront_domain=$CF_DOMAIN" >> $GITHUB_OUTPUT
+          echo "cloudfront_id=$CF_ID" >> $GITHUB_OUTPUT
+
+          if [ -n "$CF_DOMAIN" ]; then
+            echo ""
+            echo "========================================"
+            echo "  CloudFront HTTPS Setup Complete"
+            echo "  Distribution: $CF_ID"
+            echo "  Domain: $CF_DOMAIN"
+            echo "  HTTPS URL: https://$CF_DOMAIN"
+            echo "========================================"
+          fi
+
       - name: Get ECR registry
         id: ecr
         run: |
@@ -900,6 +988,16 @@ jobs:
           BRANCH_SLUG="${{ needs.build.outputs.branch_slug }}"
           ALB_DNS="${{ steps.env-setup.outputs.alb_dns }}"
           ALB_NAME="${{ steps.env-setup.outputs.alb_name }}"
+          CF_DOMAIN="${{ steps.cloudfront.outputs.cloudfront_domain }}"
+
+          # Use CloudFront HTTPS URL if available, otherwise fall back to ALB HTTP
+          if [ -n "$CF_DOMAIN" ]; then
+            BASE_URL="https://$CF_DOMAIN"
+            URL_NOTE="(via CloudFront HTTPS)"
+          else
+            BASE_URL="http://$ALB_DNS"
+            URL_NOTE="(direct ALB - HTTP only)"
+          fi
 
           echo ""
           echo "========================================"
@@ -911,14 +1009,18 @@ jobs:
           echo "  Branch: ${{ github.ref_name }}"
           echo "  ALB: $ALB_NAME"
           echo ""
-          echo "  URLs (direct access - no headers needed):"
-          echo "    Dashboard:    http://$ALB_DNS"
-          echo "    Admin Login:  http://$ALB_DNS/#/login"
-          echo "    Admin Panel:  http://$ALB_DNS/#/admin"
-          echo "    Participant:  http://$ALB_DNS/#/enter"
-          echo "    Health Check: http://$ALB_DNS/api/health"
-          echo "    Version:      http://$ALB_DNS/api/version"
+          echo "  URLs ${URL_NOTE}:"
+          echo "    Dashboard:    $BASE_URL"
+          echo "    Admin Login:  $BASE_URL/#/login"
+          echo "    Admin Panel:  $BASE_URL/#/admin"
+          echo "    Participant:  $BASE_URL/#/enter"
+          echo "    Health Check: $BASE_URL/api/health"
+          echo "    Version:      $BASE_URL/api/version"
           echo ""
+          if [ -n "$CF_DOMAIN" ]; then
+            echo "  CloudFront: ${{ steps.cloudfront.outputs.cloudfront_id }}"
+            echo "  ALB (origin): http://$ALB_DNS"
+          fi
           if [ "$ENVIRONMENT" == "test" ]; then
             echo "  Note: This is a feature branch deployment with its own ALB."
             echo "  Main branch (production) remains unaffected at vibe-dashboard-alb"

@@ -657,7 +657,7 @@ export async function checkSetupStatus(): Promise<{
         imageUri = `${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab`;
       }
     } catch {
-      return { configured: false, missing: ['AWS access (check task role)'], ecrImageExists: false, imageUri: null, availableImages: [] };
+      return { configured: false, missing: ['AWS access (check task role)'], ecrImageExists: false, imageUri: null, availableImages: [], sharedAlbConfigured: false, cloudfrontDomain: null };
     }
 
     // Check cluster

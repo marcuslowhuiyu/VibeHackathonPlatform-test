@@ -162,8 +162,16 @@ echo "  React App: http://<public-ip>:3000"
 echo "=========================================="
 echo ""
 
+# Determine base path for ALB routing
+SERVER_BASE_PATH=""
+if [ -n "$INSTANCE_ID" ]; then
+    SERVER_BASE_PATH="/i/${INSTANCE_ID}"
+    echo "  Server base path: ${SERVER_BASE_PATH}"
+fi
+
 exec /home/.openvscode-server/bin/openvscode-server \
     --host 0.0.0.0 \
     --port 8080 \
     --without-connection-token \
-    --default-folder /home/workspace
+    --default-folder /home/workspace \
+    ${SERVER_BASE_PATH:+--serverBasePath "$SERVER_BASE_PATH"}

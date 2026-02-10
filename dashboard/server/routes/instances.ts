@@ -25,8 +25,8 @@ import {
 const router = Router();
 
 // Helper to register instance with shared ALB
-async function registerInstanceWithALB(instance: Instance, publicIp: string): Promise<void> {
-  console.log(`[ALB] Checking instance ${instance.id}: publicIp=${publicIp}, existing_tg=${instance.alb_target_group_arn}`);
+async function registerInstanceWithALB(instance: Instance, publicIp: string, privateIp?: string): Promise<void> {
+  console.log(`[ALB] Checking instance ${instance.id}: publicIp=${publicIp}, privateIp=${privateIp}, existing_tg=${instance.alb_target_group_arn}`);
 
   // Skip if no public IP
   if (!publicIp) {
@@ -95,7 +95,7 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string): Pr
     console.log(`[ALB] Registering instance ${instance.id} with ALB`);
     const result = await registerCodingInstance(
       instance.id,
-      publicIp,
+      privateIp || publicIp,
       vpcId,
       albConfig.listenerArn
     );
@@ -185,7 +185,7 @@ router.get('/', async (req, res) => {
 
             // Register with ALB if we have a public IP and instance is running
             if (taskInfo.publicIp && newStatus === 'running') {
-              await registerInstanceWithALB(instance, taskInfo.publicIp);
+              await registerInstanceWithALB(instance, taskInfo.publicIp, taskInfo.privateIp);
             }
 
             // Update status if changed (URLs are set by registerInstanceWithALB)
@@ -394,7 +394,7 @@ router.get('/:id', async (req, res) => {
 
         // Register with ALB if we have a public IP and instance is running
         if (taskInfo.publicIp && newStatus === 'running') {
-          await registerInstanceWithALB(instance, taskInfo.publicIp);
+          await registerInstanceWithALB(instance, taskInfo.publicIp, taskInfo.privateIp);
         }
 
         // Update status if changed
@@ -600,7 +600,7 @@ router.post('/orphaned/import', async (req, res) => {
     if (taskInfo.publicIp && taskInfo.status.toLowerCase() === 'running') {
       const updatedInstance = getInstanceById(instanceId);
       if (updatedInstance) {
-        await registerInstanceWithALB(updatedInstance, taskInfo.publicIp);
+        await registerInstanceWithALB(updatedInstance, taskInfo.publicIp, taskInfo.privateIp);
       }
     }
 

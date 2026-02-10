@@ -165,7 +165,7 @@ export async function ensureCodingLabALB(
  */
 export async function registerCodingInstance(
   instanceId: string,
-  publicIp: string,
+  targetIp: string,
   vpcId: string,
   listenerArn: string
 ): Promise<{ targetGroupArn: string; ruleArn: string; accessPath: string }> {
@@ -207,14 +207,14 @@ export async function registerCodingInstance(
       TargetGroupArn: targetGroupArn,
       Targets: [
         {
-          Id: publicIp,
+          Id: targetIp,
           Port: 8080,
         },
       ],
     })
   );
 
-  console.log(`[CodingLabALB] Registered IP ${publicIp} with target group`);
+  console.log(`[CodingLabALB] Registered IP ${targetIp} with target group`);
 
   // Get existing rules to determine priority
   const rulesResponse = await client.send(

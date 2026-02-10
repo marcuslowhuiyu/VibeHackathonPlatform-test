@@ -184,7 +184,7 @@ export async function registerCodingInstance(
       Port: 8080,
       VpcId: vpcId,
       TargetType: 'ip',
-      HealthCheckPath: '/',
+      HealthCheckPath: `/i/${instanceId}/`,
       HealthCheckIntervalSeconds: 30,
       HealthCheckTimeoutSeconds: 10,
       HealthyThresholdCount: 2,

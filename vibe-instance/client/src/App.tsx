@@ -16,22 +16,36 @@ export default function App() {
 
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [activeFile, setActiveFile] = useState<string | null>(null);
+  const [previewRefreshKey, setPreviewRefreshKey] = useState(0);
 
-  // Fetch project files on mount
-  useEffect(() => {
+  // Fetch project files
+  const fetchFiles = useCallback(() => {
     fetch(`${basePath}/api/project-files`)
       .then((res) => res.json())
       .then((data: { files?: FileEntry[] }) => {
         const fileList = data.files || [];
         setFiles(fileList);
-        if (fileList.length > 0) {
+        if (fileList.length > 0 && !activeFile) {
           setActiveFile(fileList[0].path);
         }
       })
       .catch(() => {
         // Failed to load project files
       });
-  }, [basePath]);
+  }, [basePath, activeFile]);
+
+  // Fetch project files on mount
+  useEffect(() => {
+    fetchFiles();
+  }, [fetchFiles]);
+
+  // When a file changes, re-fetch the file tree and refresh the preview
+  useEffect(() => {
+    if (currentFileChange) {
+      fetchFiles();
+      setPreviewRefreshKey((k) => k + 1);
+    }
+  }, [currentFileChange, fetchFiles]);
 
   // Preview URL: behind ALB, the app preview isn't accessible on port 3000 directly.
   // For now, use direct IP access. The app_url from dashboard provides this.
@@ -58,6 +72,7 @@ export default function App() {
         <ElementHighlighter
           previewUrl={previewUrl}
           onElementClick={sendElementClick}
+          refreshKey={previewRefreshKey}
         />
       }
       codePanel={

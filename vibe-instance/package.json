@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "tsx watch server/index.ts",
     "build:client": "cd client && npm run build",
-    "start": "node dist/server/index.js"
+    "start": "node dist/server/index.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.972.0",
@@ -18,6 +19,7 @@
     "@types/node": "^22.10.0",
     "@types/ws": "^8.5.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^4.0.18"
   }
 }

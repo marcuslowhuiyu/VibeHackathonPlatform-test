@@ -13,6 +13,7 @@ import {
   DeleteRuleCommand,
   DescribeRulesCommand,
   ModifyTargetGroupAttributesCommand,
+  DescribeTargetHealthCommand,
 } from '@aws-sdk/client-elastic-load-balancing-v2';
 import {
   CloudFrontClient,
@@ -184,7 +185,7 @@ export async function registerCodingInstance(
       Port: 8080,
       VpcId: vpcId,
       TargetType: 'ip',
-      HealthCheckPath: '/',
+      HealthCheckPath: `/i/${instanceId}/`,
       HealthCheckIntervalSeconds: 30,
       HealthCheckTimeoutSeconds: 10,
       HealthyThresholdCount: 2,
@@ -453,6 +454,28 @@ export function getCodingLabALBConfig(): CodingLabALBConfig | null {
     cloudfrontDistributionId: getConfig('coding_lab_cloudfront_id') || undefined,
     cloudfrontDomain: getConfig('coding_lab_cloudfront_domain') || undefined,
   };
+}
+
+/**
+ * Check the health of targets in a target group.
+ * Returns the health state of the first target, or 'unavailable' if none found.
+ */
+export async function checkTargetHealth(
+  targetGroupArn: string
+): Promise<string> {
+  const client = getELBClient();
+  const response = await client.send(
+    new DescribeTargetHealthCommand({
+      TargetGroupArn: targetGroupArn,
+    })
+  );
+
+  const descriptions = response.TargetHealthDescriptions || [];
+  if (descriptions.length === 0) {
+    return 'unavailable';
+  }
+
+  return descriptions[0].TargetHealth?.State || 'unavailable';
 }
 
 /**

@@ -20,6 +20,7 @@ import {
   registerCodingInstance,
   deregisterCodingInstance,
   getCodingLabCloudFrontDomain,
+  checkTargetHealth,
 } from '../services/coding-lab-alb.js';
 
 const router = Router();
@@ -47,7 +48,21 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string, pri
     const cloudfrontDomain = getCodingLabCloudFrontDomain();
     const accessPath = instance.alb_access_path || `/i/${instance.id}`;
     if (!instance.vscode_url) {
-      // URL is null despite being registered - reconstruct it
+      // URL is null — check target health before setting it
+      try {
+        const health = await checkTargetHealth(instance.alb_target_group_arn);
+        if (health !== 'healthy') {
+          console.log(`[ALB] Instance ${instance.id} target not healthy yet (${health}), deferring URL`);
+          if (Object.keys(updates).length > 0) {
+            updateInstance(instance.id, updates);
+          }
+          return;
+        }
+      } catch (err: any) {
+        console.warn(`[ALB] Failed to check target health for ${instance.id}:`, err.message);
+      }
+
+      // Target is healthy — set the URL
       const albConfig = getCodingLabALBConfig();
       const url = cloudfrontDomain
         ? `https://${cloudfrontDomain}${accessPath}/`
@@ -100,18 +115,13 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string, pri
       albConfig.listenerArn
     );
 
-    // Build the VS Code URL using the shared CloudFront domain
-    const cloudfrontDomain = getCodingLabCloudFrontDomain();
-    const vscodeUrl = cloudfrontDomain
-      ? `https://${cloudfrontDomain}${result.accessPath}/`
-      : `http://${albConfig.albDnsName}${result.accessPath}/`;
-
+    // Save ALB registration fields but do NOT set vscode_url yet.
+    // The URL will be set on subsequent polling calls once the target is healthy.
     updateInstance(instance.id, {
       alb_target_group_arn: result.targetGroupArn,
       alb_rule_arn: result.ruleArn,
       alb_access_path: result.accessPath,
       public_ip: publicIp,
-      vscode_url: vscodeUrl,
       app_url: `http://${publicIp}:3000`,
     });
 
@@ -119,10 +129,9 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string, pri
     instance.alb_rule_arn = result.ruleArn;
     instance.alb_access_path = result.accessPath;
     instance.public_ip = publicIp;
-    instance.vscode_url = vscodeUrl;
     instance.app_url = `http://${publicIp}:3000`;
 
-    console.log(`[ALB] Instance registered: ${vscodeUrl}`);
+    console.log(`[ALB] Instance registered, waiting for target to become healthy before setting URL`);
   } catch (err: any) {
     console.error(`[ALB] Error registering instance ${instance.id}:`, err.message);
     // Fall back to direct IP access

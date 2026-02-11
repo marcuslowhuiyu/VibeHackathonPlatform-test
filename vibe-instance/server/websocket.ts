@@ -25,8 +25,12 @@ function send(ws: WebSocket, data: Record<string, unknown>): void {
 export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
   const wss = new WebSocketServer({ noServer: true });
 
-  // Handle HTTP → WebSocket upgrade
+  // Handle HTTP → WebSocket upgrade (skip /preview paths — those are proxied to Vite)
   server.on('upgrade', (req, socket, head) => {
+    const url = req.url || '';
+    if (url.includes('/preview')) {
+      return; // Let the preview WS proxy handler deal with this
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit('connection', ws, req);
     });

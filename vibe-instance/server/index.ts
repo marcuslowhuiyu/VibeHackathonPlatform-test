@@ -1,5 +1,6 @@
 import express from 'express';
 import { createServer, request as httpRequest } from 'http';
+import net from 'net';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs/promises';
@@ -167,7 +168,14 @@ app.use('/preview', (req, res) => {
   );
 
   proxyReq.on('error', () => {
-    res.status(502).send('Preview server not ready');
+    // Vite dev server not ready yet — return auto-refreshing HTML
+    res.status(503).send(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Loading Preview...</title>
+<meta http-equiv="refresh" content="3">
+<style>body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:system-ui;background:#1a1a2e;color:#e0e0e0}
+.loader{text-align:center}.spinner{width:40px;height:40px;border:4px solid #333;border-top:4px solid #6c63ff;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}</style></head>
+<body><div class="loader"><div class="spinner"></div><p>Starting preview server...</p><p style="font-size:0.85em;color:#888">This page will refresh automatically</p></div></body></html>`);
   });
 
   req.pipe(proxyReq, { end: true });
@@ -224,6 +232,41 @@ async function main(): Promise<void> {
   // Create the HTTP server and attach WebSocket
   const server = createServer(app);
   setupWebSocket(server, agentLoop);
+
+  // Proxy WebSocket upgrades for /preview to Vite's HMR server on port 3000
+  // Uses raw TCP socket so the full WebSocket handshake (including Sec-WebSocket-Accept) is forwarded.
+  server.on('upgrade', (req, socket, head) => {
+    let url = req.url || '';
+    // Strip ALB base path prefix
+    if (BASE_PATH && url.startsWith(BASE_PATH)) {
+      url = url.slice(BASE_PATH.length) || '/';
+    }
+    if (!url.includes('/preview')) return;
+
+    const vitePath = url.replace(/^\/preview/, '') || '/';
+
+    const proxySocket = net.connect(3000, '127.0.0.1', () => {
+      // Reconstruct the HTTP upgrade request and send to Vite
+      const reqHeaders = Object.entries(req.headers)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('\r\n');
+      proxySocket.write(
+        `GET ${vitePath} HTTP/1.1\r\nHost: 127.0.0.1:3000\r\n${reqHeaders}\r\n\r\n`
+      );
+      if (head && head.length) proxySocket.write(head);
+
+      // Pipe data bidirectionally
+      proxySocket.pipe(socket);
+      socket.pipe(proxySocket);
+    });
+
+    proxySocket.on('error', () => {
+      socket.destroy();
+    });
+    socket.on('error', () => {
+      proxySocket.destroy();
+    });
+  });
 
   // Start the Vite dev server for the user's project
   const viteProcess = spawn('npx', ['vite', '--host', '0.0.0.0', '--port', '3000'], {

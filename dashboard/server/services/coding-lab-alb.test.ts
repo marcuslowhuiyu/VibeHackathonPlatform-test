@@ -23,6 +23,7 @@ vi.mock('@aws-sdk/client-elastic-load-balancing-v2', () => {
     DeleteRuleCommand: class {},
     DeregisterTargetsCommand: class {},
     ModifyTargetGroupAttributesCommand: class {},
+    DescribeTargetHealthCommand: class { input: any; constructor(input: any) { this.input = input; } },
   };
 });
 
@@ -45,7 +46,64 @@ vi.mock('../db/database.js', () => ({
   setConfig: vi.fn(),
 }));
 
-import { registerCodingInstance } from './coding-lab-alb.js';
+import { registerCodingInstance, checkTargetHealth } from './coding-lab-alb.js';
+
+describe('checkTargetHealth', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns "healthy" when target health state is healthy', async () => {
+    mockSend.mockResolvedValueOnce({
+      TargetHealthDescriptions: [
+        {
+          Target: { Id: '10.0.0.1', Port: 8080 },
+          TargetHealth: { State: 'healthy' },
+        },
+      ],
+    });
+
+    const result = await checkTargetHealth('arn:aws:tg/test-tg');
+    expect(result).toBe('healthy');
+  });
+
+  it('returns "unhealthy" when target health state is unhealthy', async () => {
+    mockSend.mockResolvedValueOnce({
+      TargetHealthDescriptions: [
+        {
+          Target: { Id: '10.0.0.1', Port: 8080 },
+          TargetHealth: { State: 'unhealthy' },
+        },
+      ],
+    });
+
+    const result = await checkTargetHealth('arn:aws:tg/test-tg');
+    expect(result).toBe('unhealthy');
+  });
+
+  it('returns "initial" when target is still initializing', async () => {
+    mockSend.mockResolvedValueOnce({
+      TargetHealthDescriptions: [
+        {
+          Target: { Id: '10.0.0.1', Port: 8080 },
+          TargetHealth: { State: 'initial' },
+        },
+      ],
+    });
+
+    const result = await checkTargetHealth('arn:aws:tg/test-tg');
+    expect(result).toBe('initial');
+  });
+
+  it('returns "unavailable" when no targets are found', async () => {
+    mockSend.mockResolvedValueOnce({
+      TargetHealthDescriptions: [],
+    });
+
+    const result = await checkTargetHealth('arn:aws:tg/test-tg');
+    expect(result).toBe('unavailable');
+  });
+});
 
 describe('registerCodingInstance', () => {
   beforeEach(() => {

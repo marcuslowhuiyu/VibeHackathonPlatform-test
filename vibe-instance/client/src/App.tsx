@@ -47,11 +47,10 @@ export default function App() {
     }
   }, [currentFileChange, fetchFiles]);
 
-  // Preview URL: behind ALB, the app preview isn't accessible on port 3000 directly.
-  // For now, use direct IP access. The app_url from dashboard provides this.
-  // When accessed directly (local dev), use port 3000.
+  // Preview URL: behind ALB, port 3000 is unreachable. Use the /preview proxy.
+  // In local dev (no basePath), use port 3000 directly.
   const previewUrl = basePath
-    ? `${window.location.protocol}//${window.location.hostname}:3000`
+    ? `${window.location.origin}${basePath}/preview`
     : `${window.location.protocol}//${window.location.hostname}:3000`;
 
   const handleSelectFile = useCallback((path: string) => {

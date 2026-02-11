@@ -1,5 +1,5 @@
 import express from 'express';
-import { createServer } from 'http';
+import { createServer, request as httpRequest } from 'http';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs/promises';
@@ -145,6 +145,32 @@ app.get('/api/file/:filePath(*)', async (req, res) => {
     const message = err instanceof Error ? err.message : String(err);
     res.status(404).json({ error: message });
   }
+});
+
+// ---- Reverse proxy for the user's Vite dev server (port 3000) -----------
+// The ALB only routes to port 8080, so we proxy /preview/* to localhost:3000
+
+app.use('/preview', (req, res) => {
+  const proxyPath = req.url || '/';
+  const proxyReq = httpRequest(
+    {
+      hostname: '127.0.0.1',
+      port: 3000,
+      path: proxyPath,
+      method: req.method,
+      headers: { ...req.headers, host: `127.0.0.1:3000` },
+    },
+    (proxyRes) => {
+      res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+      proxyRes.pipe(res, { end: true });
+    },
+  );
+
+  proxyReq.on('error', () => {
+    res.status(502).send('Preview server not ready');
+  });
+
+  req.pipe(proxyReq, { end: true });
 });
 
 // ---- SPA fallback --------------------------------------------------------

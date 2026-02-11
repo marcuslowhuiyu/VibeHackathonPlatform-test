@@ -152,7 +152,13 @@ app.get('/api/file/:filePath(*)', async (req, res) => {
 // The ALB only routes to port 8080, so we proxy /preview/* to localhost:3000
 
 app.use('/preview', (req, res) => {
-  const proxyPath = req.url || '/';
+  // Reconstruct the full path Vite expects (with --base prefix when behind ALB).
+  // Express already stripped /i/{id}, and app.use('/preview') stripped /preview,
+  // so req.url is the remainder (e.g. / or /@vite/client).
+  // Vite was started with --base /i/{id}/preview/, so re-add that prefix.
+  const proxyPath = BASE_PATH
+    ? `${BASE_PATH}/preview${req.url || '/'}`
+    : (req.url || '/');
   const proxyReq = httpRequest(
     {
       hostname: '127.0.0.1',
@@ -243,7 +249,11 @@ async function main(): Promise<void> {
     }
     if (!url.includes('/preview')) return;
 
-    const vitePath = url.replace(/^\/preview/, '') || '/';
+    // Reconstruct the full path Vite expects (with --base prefix when behind ALB)
+    const remainder = url.replace(/^\/preview/, '') || '/';
+    const vitePath = BASE_PATH
+      ? `${BASE_PATH}/preview${remainder}`
+      : remainder;
 
     const proxySocket = net.connect(3000, '127.0.0.1', () => {
       // Reconstruct the HTTP upgrade request and send to Vite
@@ -268,8 +278,14 @@ async function main(): Promise<void> {
     });
   });
 
-  // Start the Vite dev server for the user's project
-  const viteProcess = spawn('npx', ['vite', '--host', '0.0.0.0', '--port', '3000'], {
+  // Start the Vite dev server for the user's project.
+  // When behind ALB, set --base so Vite generates URLs with the full routable prefix.
+  // This ensures <script src="/i/{id}/preview/src/main.tsx"> goes through the ALB.
+  const viteArgs = ['vite', '--host', '0.0.0.0', '--port', '3000'];
+  if (BASE_PATH) {
+    viteArgs.push('--base', `${BASE_PATH}/preview/`);
+  }
+  const viteProcess = spawn('npx', viteArgs, {
     cwd: PROJECT_ROOT,
     stdio: 'inherit',
   });

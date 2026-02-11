@@ -49,8 +49,10 @@ export default function App() {
 
   // Preview URL: behind ALB, port 3000 is unreachable. Use the /preview proxy.
   // In local dev (no basePath), use port 3000 directly.
+  // Trailing slash is critical: it makes the browser resolve relative URLs
+  // from /i/{id}/preview/ rather than /i/{id}/, keeping them routable through the ALB.
   const previewUrl = basePath
-    ? `${window.location.origin}${basePath}/preview`
+    ? `${window.location.origin}${basePath}/preview/`
     : `${window.location.protocol}//${window.location.hostname}:3000`;
 
   const handleSelectFile = useCallback((path: string) => {

@@ -8,6 +8,8 @@ import {
   type Tool,
   type ConverseStreamOutput,
 } from "@aws-sdk/client-bedrock-runtime";
+import fs from "fs/promises";
+import path from "path";
 import { executeTool, TOOL_DEFINITIONS } from "./tools.js";
 
 // ---------------------------------------------------------------------------
@@ -251,12 +253,26 @@ export class AgentLoop extends EventEmitter {
             result,
           });
 
-          // Emit file_changed for mutating tools
+          // Emit file_changed for mutating tools, including file content
           if (FILE_MUTATING_TOOLS.has(name!)) {
             const toolInput = input as Record<string, unknown>;
             if (toolInput.path) {
+              // For write_file, content is in the tool input.
+              // For edit_file, read the file after the edit.
+              let fileContent: string | undefined;
+              if (name === "write_file") {
+                fileContent = toolInput.content as string;
+              } else {
+                try {
+                  const resolved = path.resolve("/home/workspace/project", toolInput.path as string);
+                  fileContent = await fs.readFile(resolved, "utf-8");
+                } catch {
+                  // If read fails, emit without content
+                }
+              }
               this.emit("agent:file_changed", {
                 path: toolInput.path as string,
+                content: fileContent,
               });
             }
           }

@@ -9,10 +9,18 @@ interface ElementInfo {
 interface ElementHighlighterProps {
   previewUrl: string;
   onElementClick: (info: ElementInfo) => void;
+  refreshKey?: number;
 }
 
-export default function ElementHighlighter({ previewUrl, onElementClick }: ElementHighlighterProps) {
+export default function ElementHighlighter({ previewUrl, onElementClick, refreshKey }: ElementHighlighterProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // Reload the iframe when refreshKey changes (file was modified by agent)
+  useEffect(() => {
+    if (refreshKey && iframeRef.current) {
+      iframeRef.current.src = iframeRef.current.src;
+    }
+  }, [refreshKey]);
 
   // Listen for postMessage events from the injected script
   useEffect(() => {

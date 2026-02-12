@@ -142,6 +142,8 @@ const ELB_POLICY = JSON.stringify({
       'elasticloadbalancing:DescribeRules',
       'elasticloadbalancing:DescribeTags',
       'elasticloadbalancing:ModifyTargetGroupAttributes',
+      'elasticloadbalancing:DescribeTargetHealth',
+      'elasticloadbalancing:ModifyTargetGroup',
       'elasticloadbalancing:AddTags',
     ],
     Resource: '*',

@@ -21,6 +21,7 @@ import {
   deregisterCodingInstance,
   getCodingLabCloudFrontDomain,
   checkTargetHealth,
+  ensureTargetGroupMatcher,
 } from '../services/coding-lab-alb.js';
 
 const router = Router();
@@ -53,6 +54,14 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string, pri
         const health = await checkTargetHealth(instance.alb_target_group_arn);
         if (health !== 'healthy') {
           console.log(`[ALB] Instance ${instance.id} target not healthy yet (${health}), deferring URL`);
+          // Fix old target groups that lack the Matcher for redirects
+          if (health === 'unhealthy') {
+            try {
+              await ensureTargetGroupMatcher(instance.alb_target_group_arn);
+            } catch (matcherErr: any) {
+              console.warn(`[ALB] Failed to update Matcher for ${instance.id}:`, matcherErr.message);
+            }
+          }
           if (Object.keys(updates).length > 0) {
             updateInstance(instance.id, updates);
           }

@@ -190,6 +190,7 @@ export async function registerCodingInstance(
       HealthCheckTimeoutSeconds: 10,
       HealthyThresholdCount: 2,
       UnhealthyThresholdCount: 3,
+      Matcher: { HttpCode: '200-399' },  // Accept redirects from OpenVSCode Server
       Tags: [
         { Key: 'InstanceId', Value: instanceId },
         { Key: 'Purpose', Value: 'Coding Lab Instance' },

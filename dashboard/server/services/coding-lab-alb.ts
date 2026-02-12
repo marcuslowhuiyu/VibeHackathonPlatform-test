@@ -13,6 +13,7 @@ import {
   DeleteRuleCommand,
   DescribeRulesCommand,
   ModifyTargetGroupAttributesCommand,
+  ModifyTargetGroupCommand,
   DescribeTargetHealthCommand,
 } from '@aws-sdk/client-elastic-load-balancing-v2';
 import {
@@ -174,7 +175,7 @@ export async function registerCodingInstance(
 
   // Create a target group for this instance
   // Target group names have a 32 char limit
-  const tgName = `vibe-${instanceId}`.substring(0, 32);
+  const tgName = `vibe-${instanceId}`.replace(/[^A-Za-z0-9-]/g, '-').substring(0, 32);
 
   console.log(`[CodingLabALB] Creating target group for instance ${instanceId}`);
 
@@ -477,6 +478,23 @@ export async function checkTargetHealth(
   }
 
   return descriptions[0].TargetHealth?.State || 'unavailable';
+}
+
+/**
+ * Ensure a target group has the correct Matcher set to accept redirects.
+ * Fixes old target groups created before the Matcher was added.
+ */
+export async function ensureTargetGroupMatcher(
+  targetGroupArn: string
+): Promise<void> {
+  const client = getELBClient();
+  console.log(`[CodingLabALB] Updating Matcher for target group: ${targetGroupArn}`);
+  await client.send(
+    new ModifyTargetGroupCommand({
+      TargetGroupArn: targetGroupArn,
+      Matcher: { HttpCode: '200-399' },
+    })
+  );
 }
 
 /**

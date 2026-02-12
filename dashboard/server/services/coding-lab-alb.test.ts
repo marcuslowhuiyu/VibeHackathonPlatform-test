@@ -23,6 +23,7 @@ vi.mock('@aws-sdk/client-elastic-load-balancing-v2', () => {
     DeleteRuleCommand: class {},
     DeregisterTargetsCommand: class {},
     ModifyTargetGroupAttributesCommand: class {},
+    ModifyTargetGroupCommand: class { input: any; constructor(input: any) { this.input = input; } },
     DescribeTargetHealthCommand: class { input: any; constructor(input: any) { this.input = input; } },
   };
 });
@@ -46,7 +47,7 @@ vi.mock('../db/database.js', () => ({
   setConfig: vi.fn(),
 }));
 
-import { registerCodingInstance, checkTargetHealth } from './coding-lab-alb.js';
+import { registerCodingInstance, checkTargetHealth, ensureTargetGroupMatcher } from './coding-lab-alb.js';
 
 describe('checkTargetHealth', () => {
   beforeEach(() => {
@@ -167,5 +168,51 @@ describe('registerCodingInstance', () => {
     const pathValues = ruleCall.input.Conditions[0].PathPatternConfig.Values;
     expect(pathValues).toContain(`/i/${instanceId}`);
     expect(pathValues).toContain(`/i/${instanceId}/*`);
+  });
+
+  it('sanitizes underscores in target group name', async () => {
+    const instanceId = 'vibe-cl-y_ZZR';
+
+    await registerCodingInstance(
+      instanceId,
+      '10.0.0.1',
+      'vpc-123',
+      'arn:aws:listener/test'
+    );
+
+    const createTgCall = mockSend.mock.calls[0][0];
+    expect(createTgCall.input.Name).toBe('vibe-vibe-cl-y-ZZR');
+    expect(createTgCall.input.Name).not.toContain('_');
+  });
+
+  it('sanitizes all non-alphanumeric/hyphen characters in target group name', async () => {
+    const instanceId = 'a_b.c!d';
+
+    await registerCodingInstance(
+      instanceId,
+      '10.0.0.1',
+      'vpc-123',
+      'arn:aws:listener/test'
+    );
+
+    const createTgCall = mockSend.mock.calls[0][0];
+    expect(createTgCall.input.Name).toBe('vibe-a-b-c-d');
+  });
+});
+
+describe('ensureTargetGroupMatcher', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('calls ModifyTargetGroupCommand with Matcher 200-399', async () => {
+    mockSend.mockResolvedValueOnce({});
+
+    await ensureTargetGroupMatcher('arn:aws:tg/old-tg');
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const call = mockSend.mock.calls[0][0];
+    expect(call.input.TargetGroupArn).toBe('arn:aws:tg/old-tg');
+    expect(call.input.Matcher).toEqual({ HttpCode: '200-399' });
   });
 });

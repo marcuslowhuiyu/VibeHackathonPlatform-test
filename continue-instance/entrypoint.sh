@@ -174,4 +174,4 @@ exec /home/.openvscode-server/bin/openvscode-server \
     --port 8080 \
     --without-connection-token \
     --default-folder /home/workspace \
-    ${SERVER_BASE_PATH:+--serverBasePath "$SERVER_BASE_PATH"}
+    ${SERVER_BASE_PATH:+--server-base-path "$SERVER_BASE_PATH"}

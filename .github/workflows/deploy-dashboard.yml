@@ -366,6 +366,14 @@ jobs:
                   "sts:GetCallerIdentity"
                 ],
                 "Resource": "*"
+              },
+              {
+                "Sid": "ELBAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "elasticloadbalancing:*"
+                ],
+                "Resource": "*"
               }
             ]
           }
@@ -553,6 +561,14 @@ jobs:
                 "Effect": "Allow",
                 "Action": [
                   "sts:GetCallerIdentity"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Sid": "ELBAccess",
+                "Effect": "Allow",
+                "Action": [
+                  "elasticloadbalancing:*"
                 ],
                 "Resource": "*"
               }

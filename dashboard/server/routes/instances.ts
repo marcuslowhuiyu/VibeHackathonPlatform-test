@@ -69,6 +69,10 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string, pri
         }
       } catch (err: any) {
         console.warn(`[ALB] Failed to check target health for ${instance.id}:`, err.message);
+        if (Object.keys(updates).length > 0) {
+          updateInstance(instance.id, updates);
+        }
+        return;
       }
 
       // Target is healthy — set the URL

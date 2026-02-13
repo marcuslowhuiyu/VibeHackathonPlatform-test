@@ -30,21 +30,17 @@ const MAX_ITERATIONS = 25; // safety limit to prevent infinite loops
 // System prompts
 // ---------------------------------------------------------------------------
 
-function buildSystemPrompt(
-  mode: "vibe" | "vibe-pro",
-  repoMap?: string,
-): string {
-  const basePrompt = `You are a friendly AI coding assistant helping a non-technical hackathon participant build a React web app.
+function buildSystemPrompt(repoMap?: string): string {
+  const basePrompt = `You are a friendly AI coding assistant helping a hackathon participant build a React web app.
 
 Key rules:
 - You can only read and modify files within the project directory.
-- Always explain what you are doing in simple, beginner-friendly terms before and after making changes.
-- Keep code simple and beginner-friendly. Avoid overly clever patterns.
+- Always explain what you are doing in clear terms before and after making changes.
+- Keep code simple and approachable. Avoid overly clever patterns.
 - After making changes to code, remind the user to check the live preview to see the results.
 - When creating new files, also make sure they are properly imported where needed.
 - If something goes wrong, explain the error in plain language and suggest a fix.
-
-${mode === "vibe" ? "The user is in VIBE mode — they describe what they want in plain English and you build it for them. Be proactive: scaffold files, install patterns, and wire things up without asking too many questions." : "The user is in VIBE-PRO mode — they have some coding experience. You can be slightly more technical in explanations, but still keep things clear and approachable."}`;
+- You can be slightly more technical in explanations, but still keep things clear and approachable.`;
 
   if (repoMap) {
     return `${basePrompt}\n\nHere is a map of the current project files for reference:\n<repo-map>\n${repoMap}\n</repo-map>`;
@@ -91,12 +87,10 @@ const FILE_MUTATING_TOOLS = new Set(["write_file", "edit_file"]);
 export class AgentLoop extends EventEmitter {
   private client: BedrockRuntimeClient;
   private conversationHistory: Message[] = [];
-  private instanceMode: "vibe" | "vibe-pro";
   private repoMap?: string;
 
-  constructor(instanceMode: "vibe" | "vibe-pro", repoMap?: string) {
+  constructor(repoMap?: string) {
     super();
-    this.instanceMode = instanceMode;
     this.repoMap = repoMap;
     this.client = new BedrockRuntimeClient({});
   }
@@ -126,10 +120,7 @@ export class AgentLoop extends EventEmitter {
 
   private async runLoop(): Promise<void> {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-      const systemPrompt = buildSystemPrompt(
-        this.instanceMode,
-        this.repoMap,
-      );
+      const systemPrompt = buildSystemPrompt(this.repoMap);
 
       const command = new ConverseStreamCommand({
         modelId: MODEL_ID,

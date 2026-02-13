@@ -161,12 +161,14 @@ export class AgentLoop extends EventEmitter {
       const systemPrompt = buildSystemPrompt(this.repoMap);
 
       // Build the ConverseStream command with extended thinking enabled.
-      // IMPORTANT: When extended thinking is enabled, do NOT set maxTokens
-      // in inferenceConfig — Bedrock will reject the request.
+      // max_tokens must be greater than thinking.budget_tokens.
       const command = new ConverseStreamCommand({
         modelId: MODEL_ID,
         system: [{ text: systemPrompt }] as SystemContentBlock[],
         messages: this.conversationHistory,
+        inferenceConfig: {
+          maxTokens: 16384,
+        },
         toolConfig: {
           tools: bedrockTools(),
         },

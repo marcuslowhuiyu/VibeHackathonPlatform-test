@@ -107,7 +107,9 @@ export function useWebSocket(): {
             break;
 
           case 'agent:file_changed':
-            setCurrentFileChange({ path: data.path, content: data.content });
+            if (data.path) {
+              setCurrentFileChange({ path: data.path, content: data.content ?? '' });
+            }
             break;
 
           case 'agent:done':

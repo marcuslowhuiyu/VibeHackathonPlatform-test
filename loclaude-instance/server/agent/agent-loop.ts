@@ -189,24 +189,42 @@ export class AgentLoop extends EventEmitter {
       // ---- Parse the streaming response ----
       if (response.stream) {
         let currentText = "";
+        let currentThinking = "";
+        let currentBlockType: "thinking" | "text" | "toolUse" = "text";
         let currentToolUseId: string | undefined;
         let currentToolName: string | undefined;
         let currentToolInputJson = "";
 
         for await (const event of response.stream as AsyncIterable<ConverseStreamOutput>) {
+          // -- Content block start --
+          if (event.contentBlockStart !== undefined) {
+            if (event.contentBlockStart.start?.toolUse) {
+              currentBlockType = "toolUse";
+              const toolStart = event.contentBlockStart.start.toolUse;
+              currentToolUseId = toolStart.toolUseId;
+              currentToolName = toolStart.name;
+              currentToolInputJson = "";
+            } else {
+              // Will be determined by the first delta (thinking vs text)
+              currentBlockType = "text";
+            }
+          }
+
+          // -- Reasoning/thinking delta --
+          const reasoningDelta = (event.contentBlockDelta?.delta as Record<string, unknown>)?.reasoningContent as
+            | { text?: string }
+            | undefined;
+          if (reasoningDelta?.text) {
+            currentBlockType = "thinking";
+            currentThinking += reasoningDelta.text;
+            this.emit("agent:thinking", { text: reasoningDelta.text });
+          }
+
           // -- Text delta --
           if (event.contentBlockDelta?.delta?.text) {
             const chunk = event.contentBlockDelta.delta.text;
             currentText += chunk;
             this.emit("agent:thinking", { text: chunk });
-          }
-
-          // -- Tool use start --
-          if (event.contentBlockStart?.start?.toolUse) {
-            const toolStart = event.contentBlockStart.start.toolUse;
-            currentToolUseId = toolStart.toolUseId;
-            currentToolName = toolStart.name;
-            currentToolInputJson = "";
           }
 
           // -- Tool input delta --
@@ -217,7 +235,7 @@ export class AgentLoop extends EventEmitter {
 
           // -- Content block stop --
           if (event.contentBlockStop !== undefined) {
-            if (currentToolUseId && currentToolName) {
+            if (currentBlockType === "toolUse" && currentToolUseId && currentToolName) {
               // Finalize tool use block
               let parsedInput: Record<string, unknown> = {};
               try {
@@ -238,11 +256,20 @@ export class AgentLoop extends EventEmitter {
               currentToolUseId = undefined;
               currentToolName = undefined;
               currentToolInputJson = "";
+            } else if (currentBlockType === "thinking" && currentThinking) {
+              // Finalize thinking/reasoning block — preserve for conversation history
+              assistantContent.push({
+                reasoningContent: {
+                  reasoningText: { text: currentThinking },
+                },
+              } as ContentBlock);
+              currentThinking = "";
             } else if (currentText) {
               // Finalize text block
               assistantContent.push({ text: currentText });
               currentText = "";
             }
+            currentBlockType = "text";
           }
 
           // -- Message stop --

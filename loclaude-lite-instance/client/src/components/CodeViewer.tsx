@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import Editor from '@monaco-editor/react';
 
 interface FileEntry {
@@ -69,54 +69,22 @@ function getLanguage(path: string): string {
 
 export default function CodeViewer({ files, activeFile, onSelectFile, fileChange }: CodeViewerProps) {
   const [displayContent, setDisplayContent] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const typewriterRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const targetContentRef = useRef('');
-  const charIndexRef = useRef(0);
 
-  // Handle fileChange: auto-switch and typewriter effect
+  // Handle fileChange: auto-switch and show content immediately
   useEffect(() => {
     if (!fileChange) return;
 
     // Auto-switch to the changed file
     onSelectFile(fileChange.path);
 
-    // Clear any existing typewriter
-    if (typewriterRef.current) {
-      clearInterval(typewriterRef.current);
+    // Show content immediately (no typewriter — it blocks rendering for large files)
+    if (fileChange.content) {
+      setDisplayContent(fileChange.content);
     }
-
-    // Start typewriter effect
-    targetContentRef.current = fileChange.content;
-    charIndexRef.current = 0;
-    setDisplayContent('');
-    setIsTyping(true);
-
-    typewriterRef.current = setInterval(() => {
-      charIndexRef.current += 1;
-      const nextContent = targetContentRef.current.slice(0, charIndexRef.current);
-      setDisplayContent(nextContent);
-
-      if (charIndexRef.current >= targetContentRef.current.length) {
-        if (typewriterRef.current) {
-          clearInterval(typewriterRef.current);
-          typewriterRef.current = null;
-        }
-        setIsTyping(false);
-      }
-    }, 15);
-
-    return () => {
-      if (typewriterRef.current) {
-        clearInterval(typewriterRef.current);
-        typewriterRef.current = null;
-      }
-    };
   }, [fileChange]);
 
-  // When manually selecting a file (not via typewriter), show full content
+  // When selecting a file, show its content
   useEffect(() => {
-    if (isTyping) return;
     if (!activeFile) {
       setDisplayContent('');
       return;
@@ -125,7 +93,7 @@ export default function CodeViewer({ files, activeFile, onSelectFile, fileChange
     if (file) {
       setDisplayContent(file.content);
     }
-  }, [activeFile, files, isTyping]);
+  }, [activeFile, files]);
 
   const activeLanguage = activeFile ? getLanguage(activeFile) : 'plaintext';
 
@@ -140,14 +108,7 @@ export default function CodeViewer({ files, activeFile, onSelectFile, fileChange
           {files.map((file) => (
             <button
               key={file.path}
-              onClick={() => {
-                if (isTyping && typewriterRef.current) {
-                  clearInterval(typewriterRef.current);
-                  typewriterRef.current = null;
-                  setIsTyping(false);
-                }
-                onSelectFile(file.path);
-              }}
+              onClick={() => onSelectFile(file.path)}
               className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-gray-700 transition-colors ${
                 activeFile === file.path
                   ? 'bg-gray-700 text-blue-400'

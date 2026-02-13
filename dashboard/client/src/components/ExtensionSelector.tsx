@@ -41,6 +41,33 @@ const EXTENSIONS: Extension[] = [
     ],
     credentialSupport: 'AWS credentials auto-configured via task role',
   },
+  {
+    id: 'loclaude-lite',
+    name: 'Loclaude Lite',
+    description: 'Enhanced AI coding assistant with shell access and AST-based code understanding',
+    features: [
+      'Shell command execution (npm, git, tests)',
+      'AST-aware codebase understanding',
+      'Smart file search with glob and grep',
+      'Live preview UI',
+      'Auto-refreshing code context'
+    ],
+    credentialSupport: 'AWS credentials auto-configured via task role',
+  },
+  {
+    id: 'loclaude',
+    name: 'Loclaude',
+    description: 'Claude Code-style AI agent with sub-agents, extended thinking, and persistent shell',
+    features: [
+      'Claude Code-style tool design',
+      'Sub-agent spawning for parallel tasks',
+      'Extended thinking for complex reasoning',
+      'Persistent shell state across commands',
+      'Read-before-write safety enforcement'
+    ],
+    credentialSupport: 'AWS credentials auto-configured via task role',
+    recommended: true,
+  },
 ]
 
 export default function ExtensionSelector() {

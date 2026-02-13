@@ -207,9 +207,12 @@ export default function ParticipantPortal({ user, onLogout }: ParticipantPortalP
 
             {/* Action Buttons */}
             <div className="grid md:grid-cols-2 gap-4">
-              {/* VS Code / Vibe Studio Button */}
+              {/* VS Code / Vibe Studio / Loclaude Studio Button */}
               {(() => {
-                const isVibeInstance = instance.ai_extension === 'vibe';
+                const isLoclaudeInstance = ['loclaude-lite', 'loclaude'].includes(instance.ai_extension || '');
+                const isVibeInstance = instance.ai_extension === 'vibe' || isLoclaudeInstance;
+                const studioLabel = isLoclaudeInstance ? 'Loclaude Studio' : isVibeInstance ? 'Vibe Studio' : 'VS Code';
+                const studioSubtext = isLoclaudeInstance ? 'Start building with AI agents' : isVibeInstance ? 'Start building with AI' : 'Start coding in your browser';
                 return (
               <a
                 href={instance.vscode_url || '#'}
@@ -228,9 +231,9 @@ export default function ParticipantPortal({ user, onLogout }: ParticipantPortalP
               >
                 <Code className="w-8 h-8" />
                 <div className="text-left">
-                  <div className="font-semibold text-lg">{isVibeInstance ? 'Open Vibe Studio' : 'Open VS Code'}</div>
+                  <div className="font-semibold text-lg">Open {studioLabel}</div>
                   <div className="text-sm opacity-75">
-                    {instance.vscode_url ? (isVibeInstance ? 'Start building with AI' : 'Start coding in your browser') : 'Waiting for instance...'}
+                    {instance.vscode_url ? studioSubtext : 'Waiting for instance...'}
                   </div>
                 </div>
                 <ExternalLink className="w-5 h-5 ml-auto" />
@@ -270,7 +273,16 @@ export default function ParticipantPortal({ user, onLogout }: ParticipantPortalP
               <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
                 <h4 className="font-medium text-gray-300 mb-2">Tips:</h4>
                 <ul className="text-sm text-gray-400 space-y-1">
-                  {instance.ai_extension === 'vibe' ? (
+                  {['loclaude-lite', 'loclaude'].includes(instance.ai_extension || '') ? (
+                    <>
+                      <li>• Loclaude Studio runs in your browser - no installation needed</li>
+                      <li>• Chat with AI to build your app - it can run commands, search code, and edit files</li>
+                      <li>• Your app preview updates live as changes are made</li>
+                      {instance.ai_extension === 'loclaude' && (
+                        <li>• Loclaude uses extended thinking and sub-agents for complex tasks</li>
+                      )}
+                    </>
+                  ) : instance.ai_extension === 'vibe' ? (
                     <>
                       <li>• Vibe Studio runs in your browser - no installation needed</li>
                       <li>• Chat with AI to build your app - it writes the code for you</li>

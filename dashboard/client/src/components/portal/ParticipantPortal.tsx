@@ -209,7 +209,7 @@ export default function ParticipantPortal({ user, onLogout }: ParticipantPortalP
             <div className="grid md:grid-cols-2 gap-4">
               {/* VS Code / Vibe Studio Button */}
               {(() => {
-                const isVibeInstance = instance.ai_extension === 'vibe' || instance.ai_extension === 'vibe-pro';
+                const isVibeInstance = instance.ai_extension === 'vibe';
                 return (
               <a
                 href={instance.vscode_url || '#'}
@@ -270,7 +270,7 @@ export default function ParticipantPortal({ user, onLogout }: ParticipantPortalP
               <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
                 <h4 className="font-medium text-gray-300 mb-2">Tips:</h4>
                 <ul className="text-sm text-gray-400 space-y-1">
-                  {instance.ai_extension === 'vibe' || instance.ai_extension === 'vibe-pro' ? (
+                  {instance.ai_extension === 'vibe' ? (
                     <>
                       <li>• Vibe Studio runs in your browser - no installation needed</li>
                       <li>• Chat with AI to build your app - it writes the code for you</li>

@@ -536,7 +536,6 @@ phases:
       - cd vibe-instance
       - docker build -t vibe-coding-lab:vibe .
       - docker tag vibe-coding-lab:vibe $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe
-      - docker tag vibe-coding-lab:vibe $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe-pro
       - cd ..
   post_build:
     commands:
@@ -544,7 +543,6 @@ phases:
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe
-      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe-pro
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
       - echo Build completed
 `;
@@ -629,14 +627,13 @@ phases:
   }
 }
 
-export const AI_EXTENSIONS = ['continue', 'cline', 'vibe', 'vibe-pro'] as const;
+export const AI_EXTENSIONS = ['continue', 'cline', 'vibe'] as const;
 export type AIExtension = typeof AI_EXTENSIONS[number];
 
 export const EXTENSION_DIRECTORIES: Record<AIExtension, string> = {
   continue: 'continue-instance',
   cline: 'cline-instance',
   vibe: 'vibe-instance',
-  'vibe-pro': 'vibe-instance',
 };
 
 export async function checkSetupStatus(): Promise<{
@@ -811,9 +808,7 @@ cd ..
 cd vibe-instance
 docker build -t vibe-coding-lab:vibe .
 docker tag vibe-coding-lab:vibe ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:vibe
-docker tag vibe-coding-lab:vibe ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:vibe-pro
 docker push ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:vibe
-docker push ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:vibe-pro
 cd ..`;
   } catch (err: any) {
     return `# Error: ${err.message}`;

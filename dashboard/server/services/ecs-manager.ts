@@ -112,7 +112,6 @@ export async function runTask(instanceId: string, extension: string = 'continue'
     continue: 'continue',
     cline: 'cline',
     vibe: 'vibe',
-    'vibe-pro': 'vibe-pro',
   };
   const imageTag = imageTagMap[extension] || 'continue';
 
@@ -162,8 +161,8 @@ export async function runTask(instanceId: string, extension: string = 'continue'
             { name: 'INSTANCE_ID', value: instanceId },
             { name: 'AWS_REGION', value: AWS_REGION },
             { name: 'AI_EXTENSION', value: extension },
-            ...(extension === 'vibe' || extension === 'vibe-pro' ? [
-              { name: 'INSTANCE_MODE', value: extension === 'vibe-pro' ? 'vibe-pro' : 'vibe' },
+            ...(extension === 'vibe' ? [
+              { name: 'INSTANCE_MODE', value: 'vibe' },
             ] : []),
             { name: 'BEDROCK_MODEL_ID', value: process.env.BEDROCK_MODEL_ID || `${AWS_REGION.startsWith('ap-') ? 'apac' : AWS_REGION.startsWith('eu-') ? 'eu' : 'us'}.anthropic.claude-sonnet-4-20250514-v1:0` },
           ],

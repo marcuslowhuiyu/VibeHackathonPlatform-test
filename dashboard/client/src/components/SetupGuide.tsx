@@ -576,7 +576,7 @@ function FileEditor() {
 // AI EXTENSION CONFIGURATION
 // Add new AI extensions here to scale support
 // ==========================================
-type AIExtension = 'continue' | 'cline' | 'vibe' | 'vibe-pro'
+type AIExtension = 'continue' | 'cline' | 'vibe'
 
 interface ExtensionConfig {
   name: string
@@ -603,16 +603,9 @@ const AI_EXTENSIONS: Record<AIExtension, ExtensionConfig> = {
   },
   vibe: {
     name: 'Vibe',
-    description: 'AI-powered coding for non-technical users. Chat + live preview UI.',
+    description: 'AI-powered coding with chat UI, live preview, and codebase-aware AI context.',
     color: 'text-pink-400',
     bgColor: 'bg-pink-900/30 border-pink-600',
-    enabled: true,
-  },
-  'vibe-pro': {
-    name: 'Vibe Pro',
-    description: 'Enhanced Vibe with codebase-aware AI. Better for complex multi-file apps.',
-    color: 'text-amber-400',
-    bgColor: 'bg-amber-900/30 border-amber-600',
     enabled: true,
   },
 }

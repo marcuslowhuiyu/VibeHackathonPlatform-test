@@ -31,24 +31,13 @@ const EXTENSIONS: Extension[] = [
   {
     id: 'vibe',
     name: 'Vibe',
-    description: 'AI-powered coding for non-technical users with chat and live preview UI',
+    description: 'AI-powered coding with chat UI, live preview, and codebase-aware AI context',
     features: [
       'Chat-based AI interface',
-      'Live preview UI',
-      'Beginner-friendly workflow',
-      'AWS Bedrock integration'
-    ],
-    credentialSupport: 'AWS credentials auto-configured via task role',
-  },
-  {
-    id: 'vibe-pro',
-    name: 'Vibe Pro',
-    description: 'Enhanced Vibe with codebase-aware AI for complex multi-file applications',
-    features: [
       'Codebase-aware AI context',
-      'Multi-file project support',
       'Live preview UI',
-      'Advanced AWS Bedrock integration'
+      'Multi-file project support',
+      'AWS Bedrock integration'
     ],
     credentialSupport: 'AWS credentials auto-configured via task role',
   },

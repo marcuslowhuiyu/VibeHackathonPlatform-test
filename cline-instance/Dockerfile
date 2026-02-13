@@ -25,6 +25,10 @@ RUN echo "Installing Cline extension..." && \
     cp -r /tmp/cline-ext/extension/* /home/.openvscode-server/extensions/saoudrizwan.claude-dev-${CLINE_VERSION}/ && \
     rm -rf /tmp/cline.vsix /tmp/cline-ext
 
+# Patch Cline extension.js to auto-configure Bedrock via globalState
+COPY --chown=openvscode-server:openvscode-server patch-cline-config.sh /tmp/patch-cline-config.sh
+RUN chmod +x /tmp/patch-cline-config.sh && /tmp/patch-cline-config.sh ${CLINE_VERSION}
+
 RUN chown -R openvscode-server:openvscode-server /home/.openvscode-server/extensions/
 
 # 5. Install React App (as openvscode-server user)

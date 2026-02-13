@@ -86,9 +86,6 @@ echo "Configuring VS Code..."
 VSCODE_USER="/home/.openvscode-server/data/User"
 mkdir -p "$VSCODE_USER"
 
-# Escape custom instructions for JSON
-ESCAPED_INSTRUCTIONS=$(echo "$CUSTOM_INSTRUCTIONS" | jq -Rs '.')
-
 cat > "$VSCODE_USER/settings.json" << EOF
 {
   "workbench.colorTheme": "Default Dark+",
@@ -104,23 +101,29 @@ cat > "$VSCODE_USER/settings.json" << EOF
     "AWS_DEFAULT_REGION": "${AWS_REGION}"
   },
   "files.autoSave": "afterDelay",
-  "files.autoSaveDelay": 1000,
-  "cline.apiProvider": "bedrock",
-  "cline.awsRegion": "${AWS_REGION}",
-  "cline.apiModelId": "${API_MODEL_ID}",
-  "cline.customInstructions": ${ESCAPED_INSTRUCTIONS}
+  "files.autoSaveDelay": 1000
 }
 EOF
 
 # ==========================================
-# 4. START REACT DEV SERVER
+# 4. CREATE .clinerules FOR CUSTOM INSTRUCTIONS
+# ==========================================
+if [ -n "$CUSTOM_INSTRUCTIONS" ]; then
+    echo "Writing .clinerules file..."
+    echo "$CUSTOM_INSTRUCTIONS" > /home/workspace/.clinerules
+    chown openvscode-server:openvscode-server /home/workspace/.clinerules 2>/dev/null || true
+    echo "  .clinerules created"
+fi
+
+# ==========================================
+# 5. START REACT DEV SERVER
 # ==========================================
 echo "Starting React app on port 3000..."
 cd /home/workspace
 npm run dev -- --host 0.0.0.0 --port 3000 &
 
 # ==========================================
-# 5. START VS CODE SERVER
+# 6. START VS CODE SERVER
 # ==========================================
 echo ""
 echo "=========================================="

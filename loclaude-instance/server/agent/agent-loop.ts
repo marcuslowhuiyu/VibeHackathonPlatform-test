@@ -190,6 +190,7 @@ export class AgentLoop extends EventEmitter {
       if (response.stream) {
         let currentText = "";
         let currentThinking = "";
+        let currentThinkingSignature = "";
         let currentBlockType: "thinking" | "text" | "toolUse" = "text";
         let currentToolUseId: string | undefined;
         let currentToolName: string | undefined;
@@ -210,14 +211,20 @@ export class AgentLoop extends EventEmitter {
             }
           }
 
-          // -- Reasoning/thinking delta --
-          const reasoningDelta = (event.contentBlockDelta?.delta as Record<string, unknown>)?.reasoningContent as
-            | { text?: string }
+          // -- Reasoning/thinking delta (text chunks + signature) --
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const reasoningDelta = (event.contentBlockDelta?.delta as any)?.reasoningContent as
+            | { text?: string; signature?: string }
             | undefined;
-          if (reasoningDelta?.text) {
+          if (reasoningDelta) {
             currentBlockType = "thinking";
-            currentThinking += reasoningDelta.text;
-            this.emit("agent:thinking", { text: reasoningDelta.text });
+            if (reasoningDelta.text) {
+              currentThinking += reasoningDelta.text;
+              this.emit("agent:thinking", { text: reasoningDelta.text });
+            }
+            if (reasoningDelta.signature) {
+              currentThinkingSignature = reasoningDelta.signature;
+            }
           }
 
           // -- Text delta --
@@ -257,13 +264,17 @@ export class AgentLoop extends EventEmitter {
               currentToolName = undefined;
               currentToolInputJson = "";
             } else if (currentBlockType === "thinking" && currentThinking) {
-              // Finalize thinking/reasoning block — preserve for conversation history
+              // Finalize thinking/reasoning block with signature for conversation history
               assistantContent.push({
                 reasoningContent: {
-                  reasoningText: { text: currentThinking },
+                  reasoningText: {
+                    text: currentThinking,
+                    signature: currentThinkingSignature || undefined,
+                  },
                 },
               } as ContentBlock);
               currentThinking = "";
+              currentThinkingSignature = "";
             } else if (currentText) {
               // Finalize text block
               assistantContent.push({ text: currentText });

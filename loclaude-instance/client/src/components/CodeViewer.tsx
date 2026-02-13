@@ -3,7 +3,6 @@ import Editor from '@monaco-editor/react';
 
 interface FileEntry {
   path: string;
-  content: string;
 }
 
 interface FileChange {
@@ -16,6 +15,7 @@ interface CodeViewerProps {
   activeFile: string | null;
   onSelectFile: (path: string) => void;
   fileChange: FileChange | null;
+  basePath: string;
 }
 
 function getFileName(path: string): string {
@@ -67,7 +67,7 @@ function getLanguage(path: string): string {
   }
 }
 
-export default function CodeViewer({ files, activeFile, onSelectFile, fileChange }: CodeViewerProps) {
+export default function CodeViewer({ files, activeFile, onSelectFile, fileChange, basePath }: CodeViewerProps) {
   const [displayContent, setDisplayContent] = useState('');
 
   // Handle fileChange: auto-switch and show content immediately
@@ -77,23 +77,33 @@ export default function CodeViewer({ files, activeFile, onSelectFile, fileChange
     // Auto-switch to the changed file
     onSelectFile(fileChange.path);
 
-    // Show content immediately (no typewriter — it blocks rendering for large files)
+    // Show content immediately from the event
     if (fileChange.content) {
       setDisplayContent(fileChange.content);
     }
   }, [fileChange]);
 
-  // When selecting a file, show its content
+  // When activeFile changes, fetch its content on demand
   useEffect(() => {
     if (!activeFile) {
       setDisplayContent('');
       return;
     }
-    const file = files.find((f) => f.path === activeFile);
-    if (file) {
-      setDisplayContent(file.content);
+    // If the fileChange just set content for this file, skip the fetch
+    if (fileChange?.path === activeFile && fileChange?.content) {
+      return;
     }
-  }, [activeFile, files]);
+    fetch(`${basePath}/api/file/${activeFile}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.content) {
+          setDisplayContent(data.content);
+        }
+      })
+      .catch(() => {
+        setDisplayContent('// Failed to load file');
+      });
+  }, [activeFile, basePath]);
 
   const activeLanguage = activeFile ? getLanguage(activeFile) : 'plaintext';
 

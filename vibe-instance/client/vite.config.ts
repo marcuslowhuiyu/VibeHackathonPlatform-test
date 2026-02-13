@@ -12,6 +12,7 @@ export default defineConfig({
         target: 'ws://localhost:8080',
         ws: true,
       },
+      '/preview': 'http://localhost:8080',
     },
   },
 });

@@ -7,7 +7,7 @@ import ElementHighlighter from './components/ElementHighlighter';
 
 interface FileEntry {
   path: string;
-  content: string;
+  type: string;
 }
 
 export default function App() {
@@ -47,13 +47,10 @@ export default function App() {
     }
   }, [currentFileChange, fetchFiles]);
 
-  // Preview URL: behind ALB, port 3000 is unreachable. Use the /preview proxy.
-  // In local dev (no basePath), use port 3000 directly.
+  // Preview URL: always use the /preview/ proxy to keep the iframe same-origin.
   // Trailing slash is critical: it makes the browser resolve relative URLs
   // from /i/{id}/preview/ rather than /i/{id}/, keeping them routable through the ALB.
-  const previewUrl = basePath
-    ? `${window.location.origin}${basePath}/preview/`
-    : `${window.location.protocol}//${window.location.hostname}:3000`;
+  const previewUrl = `${window.location.origin}${basePath}/preview/`;
 
   const handleSelectFile = useCallback((path: string) => {
     setActiveFile(path);
@@ -74,14 +71,16 @@ export default function App() {
           previewUrl={previewUrl}
           onElementClick={sendElementClick}
           refreshKey={previewRefreshKey}
+          basePath={basePath}
         />
       }
       codePanel={
         <CodeViewer
-          files={files}
+          files={files.filter(f => f.type === 'file')}
           activeFile={activeFile}
           onSelectFile={handleSelectFile}
           fileChange={currentFileChange}
+          basePath={basePath}
         />
       }
     />

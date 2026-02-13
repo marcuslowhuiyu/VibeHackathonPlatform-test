@@ -46,7 +46,9 @@ Key rules:
 - Use bash_command to install packages, run tests, or execute build steps.
 - Use grep/glob to find files and code patterns efficiently.
 - If something goes wrong, explain the error clearly and fix it.
-- Keep code simple and well-organized.`;
+- Keep code simple and well-organized.
+- Use Tailwind CSS utility classes for styling. Ensure layouts are well-centered with proper spacing, padding, and responsive design.
+- Keep code simple and approachable. Prefer clean, readable component structures over clever abstractions.`;
 
   if (repoMap) {
     return `${basePrompt}\n\nHere is a map of the current project files for reference:\n<repo-map>\n${repoMap}\n</repo-map>`;

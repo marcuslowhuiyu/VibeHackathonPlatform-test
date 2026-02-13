@@ -49,7 +49,9 @@ Rules:
 - Use Bash to install packages, run tests, and manage git.
 - Use Glob/Grep to understand the codebase before making changes.
 - When creating files, ensure proper imports.
-- Fix errors when they occur -- read the error, understand it, fix it.`;
+- Fix errors when they occur -- read the error, understand it, fix it.
+- Use Tailwind CSS utility classes for styling. Ensure layouts are well-centered with proper spacing, padding, and responsive design.
+- Keep code simple and approachable. Prefer clean, readable component structures over clever abstractions.`;
 
   if (repoMap) {
     return `${basePrompt}\n\nProject structure:\n<repo-map>\n${repoMap}\n</repo-map>`;

@@ -10,9 +10,10 @@ interface ElementHighlighterProps {
   previewUrl: string;
   onElementClick: (info: ElementInfo) => void;
   refreshKey?: number;
+  basePath: string;
 }
 
-export default function ElementHighlighter({ previewUrl, onElementClick, refreshKey }: ElementHighlighterProps) {
+export default function ElementHighlighter({ previewUrl, onElementClick, refreshKey, basePath }: ElementHighlighterProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Reload the iframe when refreshKey changes (file was modified by agent)
@@ -48,7 +49,7 @@ export default function ElementHighlighter({ previewUrl, onElementClick, refresh
       if (!iframeDoc) return;
 
       // Fetch the highlighter inject script
-      const response = await fetch('/highlighter-inject.js');
+      const response = await fetch(`${basePath}/highlighter-inject.js`);
       const scriptText = await response.text();
 
       // Create and inject script element

@@ -14,7 +14,6 @@ import { setupWebSocket } from './websocket.js';
 // ---------------------------------------------------------------------------
 
 const PROJECT_ROOT = '/home/workspace/project';
-const INSTANCE_MODE = (process.env.INSTANCE_MODE || 'vibe') as 'vibe' | 'vibe-pro';
 const INSTANCE_ID = process.env.INSTANCE_ID || '';
 const BASE_PATH = INSTANCE_ID ? `/i/${INSTANCE_ID}` : '';
 const PORT = 8080;
@@ -106,13 +105,13 @@ app.use(express.static(clientDistPath));
 // ---- Config endpoint (client reads base path from here) ------------------
 
 app.get('/api/config', (_req, res) => {
-  res.json({ basePath: BASE_PATH, mode: INSTANCE_MODE, instanceId: INSTANCE_ID });
+  res.json({ basePath: BASE_PATH, instanceId: INSTANCE_ID });
 });
 
 // ---- Health check --------------------------------------------------------
 
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', mode: INSTANCE_MODE });
+  res.json({ status: 'ok' });
 });
 
 // ---- Project file listing ------------------------------------------------
@@ -198,19 +197,17 @@ app.get('*', (_req, res) => {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  // In vibe-pro mode, generate a repo map for richer context
+  // Generate a repo map for richer context
   let repoMap: string | undefined;
-  if (INSTANCE_MODE === 'vibe-pro') {
-    try {
-      repoMap = await generateRepoMap(PROJECT_ROOT);
-      console.log('Repo map generated for vibe-pro mode');
-    } catch (err) {
-      console.warn('Failed to generate repo map:', err);
-    }
+  try {
+    repoMap = await generateRepoMap(PROJECT_ROOT);
+    console.log('Repo map generated');
+  } catch (err) {
+    console.warn('Failed to generate repo map:', err);
   }
 
   // Create the agent loop
-  const agentLoop = new AgentLoop(INSTANCE_MODE, repoMap);
+  const agentLoop = new AgentLoop(repoMap);
 
   // Verify Bedrock connectivity
   const region = process.env.AWS_REGION || '';
@@ -304,7 +301,7 @@ async function main(): Promise<void> {
 
   // Start listening
   server.listen(PORT, () => {
-    console.log(`Vibe instance running (mode: ${INSTANCE_MODE}) on port ${PORT}`);
+    console.log(`Vibe instance running on port ${PORT}`);
   });
 }
 

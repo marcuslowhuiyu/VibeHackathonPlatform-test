@@ -55,7 +55,7 @@ describe('AgentLoop file_changed event', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    agent = new AgentLoop('vibe');
+    agent = new AgentLoop();
   });
 
   it('emits agent:file_changed with both path AND content for write_file', async () => {

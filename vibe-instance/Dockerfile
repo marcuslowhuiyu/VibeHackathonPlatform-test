@@ -25,7 +25,6 @@ RUN mkdir -p /home/workspace/project
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-ENV INSTANCE_MODE=vibe
 EXPOSE 8080 3000
 
 ENTRYPOINT ["/app/entrypoint.sh"]

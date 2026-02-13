@@ -1,0 +1,335 @@
+import express from 'express';
+import { createServer, request as httpRequest } from 'http';
+import net from 'net';
+import { fileURLToPath } from 'url';
+import path from 'path';
+import fs from 'fs/promises';
+import { spawn } from 'child_process';
+import chokidar from 'chokidar';
+import { AgentLoop } from './agent/agent-loop.js';
+import { generateRepoMap } from './agent/repo-map.js';
+import { setupWebSocket } from './websocket.js';
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+const PROJECT_ROOT = '/home/workspace/project';
+const INSTANCE_ID = process.env.INSTANCE_ID || '';
+const BASE_PATH = INSTANCE_ID ? `/i/${INSTANCE_ID}` : '';
+const PORT = 8080;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+interface FileEntry {
+  path: string;
+  type: 'file' | 'directory';
+}
+
+const SKIPPED_DIRS = new Set(['node_modules', '.git', 'dist', '.next', '.cache']);
+
+/**
+ * Recursively walk a directory up to `maxDepth` levels, returning a flat list
+ * of file and directory entries with paths relative to `root`.
+ */
+async function walkProjectFiles(
+  dir: string,
+  root: string,
+  depth: number,
+  maxDepth: number,
+): Promise<FileEntry[]> {
+  if (depth > maxDepth) return [];
+
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const results: FileEntry[] = [];
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    const relativePath = path.relative(root, fullPath).replace(/\\/g, '/');
+
+    if (entry.isDirectory()) {
+      if (SKIPPED_DIRS.has(entry.name)) continue;
+
+      results.push({ path: relativePath, type: 'directory' });
+      const children = await walkProjectFiles(fullPath, root, depth + 1, maxDepth);
+      results.push(...children);
+    } else if (entry.isFile()) {
+      results.push({ path: relativePath, type: 'file' });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Validate that a resolved file path is within the project root to prevent
+ * directory traversal attacks.
+ */
+function isWithinRoot(filePath: string, root: string): boolean {
+  const resolved = path.resolve(root, filePath);
+  return resolved.startsWith(path.resolve(root));
+}
+
+// ---------------------------------------------------------------------------
+// Express app
+// ---------------------------------------------------------------------------
+
+const app = express();
+app.use(express.json());
+
+// Strip the ALB base path prefix (/i/{instanceId}) so routes work at /
+// The ALB routes /i/{instanceId}/* to this container on port 8080
+if (BASE_PATH) {
+  app.use((req, _res, next) => {
+    if (req.url.startsWith(BASE_PATH)) {
+      req.url = req.url.slice(BASE_PATH.length) || '/';
+    }
+    next();
+  });
+}
+
+// Serve the built client UI
+const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
+app.use(express.static(clientDistPath));
+
+// ---- Config endpoint (client reads base path from here) ------------------
+
+app.get('/api/config', (_req, res) => {
+  res.json({ basePath: BASE_PATH, instanceId: INSTANCE_ID });
+});
+
+// ---- Health check --------------------------------------------------------
+
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// ---- Project file listing ------------------------------------------------
+
+app.get('/api/project-files', async (_req, res) => {
+  try {
+    const files = await walkProjectFiles(PROJECT_ROOT, PROJECT_ROOT, 0, 3);
+    res.json({ files });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+// ---- Read a single project file ------------------------------------------
+
+app.get('/api/file/:filePath(*)', async (req, res) => {
+  const filePath = req.params.filePath;
+
+  if (!isWithinRoot(filePath, PROJECT_ROOT)) {
+    res.status(403).json({ error: 'Access denied: path is outside the project root' });
+    return;
+  }
+
+  const absolutePath = path.resolve(PROJECT_ROOT, filePath);
+
+  try {
+    const content = await fs.readFile(absolutePath, 'utf-8');
+    res.json({ content });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(404).json({ error: message });
+  }
+});
+
+// ---- Reverse proxy for the user's Vite dev server (port 3000) -----------
+// The ALB only routes to port 8080, so we proxy /preview/* to localhost:3000
+
+app.use('/preview', (req, res) => {
+  // Reconstruct the full path Vite expects (with --base prefix when behind ALB).
+  // Express already stripped /i/{id}, and app.use('/preview') stripped /preview,
+  // so req.url is the remainder (e.g. / or /@vite/client).
+  // Vite was started with --base /i/{id}/preview/, so re-add that prefix.
+  const proxyPath = BASE_PATH
+    ? `${BASE_PATH}/preview${req.url || '/'}`
+    : (req.url || '/');
+  const proxyReq = httpRequest(
+    {
+      hostname: '127.0.0.1',
+      port: 3000,
+      path: proxyPath,
+      method: req.method,
+      headers: { ...req.headers, host: `127.0.0.1:3000` },
+    },
+    (proxyRes) => {
+      res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+      proxyRes.pipe(res, { end: true });
+    },
+  );
+
+  proxyReq.on('error', () => {
+    // Vite dev server not ready yet — return auto-refreshing HTML
+    res.status(503).send(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Loading Preview...</title>
+<meta http-equiv="refresh" content="3">
+<style>body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:system-ui;background:#1a1a2e;color:#e0e0e0}
+.loader{text-align:center}.spinner{width:40px;height:40px;border:4px solid #333;border-top:4px solid #6c63ff;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}</style></head>
+<body><div class="loader"><div class="spinner"></div><p>Starting preview server...</p><p style="font-size:0.85em;color:#888">This page will refresh automatically</p></div></body></html>`);
+  });
+
+  req.pipe(proxyReq, { end: true });
+});
+
+// ---- SPA fallback --------------------------------------------------------
+
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(clientDistPath, 'index.html'));
+});
+
+// ---------------------------------------------------------------------------
+// Startup
+// ---------------------------------------------------------------------------
+
+async function main(): Promise<void> {
+  // Generate a repo map for richer context
+  let repoMap: string | undefined;
+  try {
+    repoMap = await generateRepoMap(PROJECT_ROOT);
+    console.log('Repo map generated');
+  } catch (err) {
+    console.warn('Failed to generate repo map:', err);
+  }
+
+  // Create the agent loop
+  const agentLoop = new AgentLoop(repoMap);
+
+  // File watcher for auto repo map refresh
+  const watcher = chokidar.watch(PROJECT_ROOT, {
+    ignored: /(node_modules|\.git|dist|\.next|\.cache)/,
+    persistent: true,
+    ignoreInitial: true,
+  });
+
+  let repoMapRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+  watcher.on('all', () => {
+    if (repoMapRefreshTimer) clearTimeout(repoMapRefreshTimer);
+    repoMapRefreshTimer = setTimeout(async () => {
+      try {
+        const newMap = await generateRepoMap(PROJECT_ROOT);
+        agentLoop.updateRepoMap(newMap);
+        console.log('Repo map refreshed');
+      } catch (err) {
+        console.warn('Failed to refresh repo map:', err);
+      }
+    }, 2000);
+  });
+
+  // Verify Bedrock connectivity
+  const region = process.env.AWS_REGION || '';
+  let inferencePrefix = 'us';
+  if (region.startsWith('ap-')) inferencePrefix = 'apac';
+  else if (region.startsWith('eu-')) inferencePrefix = 'eu';
+  const bedrockModelId = process.env.BEDROCK_MODEL_ID || `${inferencePrefix}.anthropic.claude-sonnet-4-20250514-v1:0`;
+  console.log(`Checking Bedrock connectivity (model: ${bedrockModelId}, region: ${process.env.AWS_REGION || 'default'})...`);
+  try {
+    const { BedrockRuntimeClient, ConverseCommand } = await import('@aws-sdk/client-bedrock-runtime');
+    const testClient = new BedrockRuntimeClient({});
+    await testClient.send(new ConverseCommand({
+      modelId: bedrockModelId,
+      messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      inferenceConfig: { maxTokens: 1 },
+    }));
+    console.log('Bedrock connectivity OK');
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`WARNING: Bedrock health check failed: ${message}`);
+    console.error('Chat will not work until Bedrock access is configured.');
+    console.error(`Model: ${bedrockModelId} | Region: ${process.env.AWS_REGION || 'not set'}`);
+  }
+
+  // Create the HTTP server and attach WebSocket
+  const server = createServer(app);
+  setupWebSocket(server, agentLoop);
+
+  // Proxy WebSocket upgrades for /preview to Vite's HMR server on port 3000
+  // Uses raw TCP socket so the full WebSocket handshake (including Sec-WebSocket-Accept) is forwarded.
+  server.on('upgrade', (req, socket, head) => {
+    let url = req.url || '';
+    // Strip ALB base path prefix
+    if (BASE_PATH && url.startsWith(BASE_PATH)) {
+      url = url.slice(BASE_PATH.length) || '/';
+    }
+    if (!url.includes('/preview')) return;
+
+    // Reconstruct the full path Vite expects (with --base prefix when behind ALB)
+    const remainder = url.replace(/^\/preview/, '') || '/';
+    const vitePath = BASE_PATH
+      ? `${BASE_PATH}/preview${remainder}`
+      : remainder;
+
+    const proxySocket = net.connect(3000, '127.0.0.1', () => {
+      // Reconstruct the HTTP upgrade request and send to Vite
+      const reqHeaders = Object.entries(req.headers)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('\r\n');
+      proxySocket.write(
+        `GET ${vitePath} HTTP/1.1\r\nHost: 127.0.0.1:3000\r\n${reqHeaders}\r\n\r\n`
+      );
+      if (head && head.length) proxySocket.write(head);
+
+      // Pipe data bidirectionally
+      proxySocket.pipe(socket);
+      socket.pipe(proxySocket);
+    });
+
+    proxySocket.on('error', () => {
+      socket.destroy();
+    });
+    socket.on('error', () => {
+      proxySocket.destroy();
+    });
+  });
+
+  // Start the Vite dev server for the user's project.
+  // When behind ALB, set --base so Vite generates URLs with the full routable prefix.
+  // This ensures <script src="/i/{id}/preview/src/main.tsx"> goes through the ALB.
+  const viteArgs = ['vite', '--host', '0.0.0.0', '--port', '3000'];
+  if (BASE_PATH) {
+    viteArgs.push('--base', `${BASE_PATH}/preview/`);
+  }
+  const viteProcess = spawn('npx', viteArgs, {
+    cwd: PROJECT_ROOT,
+    stdio: 'inherit',
+  });
+
+  viteProcess.on('error', (err) => {
+    console.error('Failed to start Vite dev server:', err.message);
+  });
+
+  // Graceful shutdown
+  process.on('SIGTERM', () => {
+    console.log('Received SIGTERM, shutting down...');
+    watcher.close();
+    viteProcess.kill();
+    server.close();
+    process.exit(0);
+  });
+
+  // Start listening
+  server.listen(PORT, () => {
+    console.log(`Loclaude instance running on port ${PORT}`);
+  });
+}
+
+main().catch((err) => {
+  console.error('Fatal error during startup:', err);
+  process.exit(1);
+});

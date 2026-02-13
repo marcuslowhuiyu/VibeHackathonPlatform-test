@@ -22,6 +22,25 @@ interface ChatPanelProps {
 
 function ToolCallCard({ tool }: { tool: ToolCall }) {
   const [expanded, setExpanded] = useState(false);
+  const isBashTool = tool.name === 'bash_command' || tool.name === 'Bash';
+
+  // Try to parse JSON for bash tools to show command and output nicely
+  let bashCommand = '';
+  let bashOutput = '';
+  if (isBashTool) {
+    try {
+      const inputObj = typeof tool.input === 'string' ? JSON.parse(tool.input) : tool.input;
+      bashCommand = inputObj.command || JSON.stringify(tool.input);
+    } catch {
+      bashCommand = String(tool.input);
+    }
+    try {
+      const resultObj = typeof tool.result === 'string' ? JSON.parse(tool.result) : tool.result;
+      bashOutput = resultObj.output || String(tool.result);
+    } catch {
+      bashOutput = String(tool.result);
+    }
+  }
 
   return (
     <div
@@ -29,23 +48,34 @@ function ToolCallCard({ tool }: { tool: ToolCall }) {
       onClick={() => setExpanded(!expanded)}
     >
       <div className="flex items-center justify-between px-3 py-2">
-        <span className="text-sm font-bold text-gray-300">{tool.name}</span>
+        <span className="text-sm font-bold text-gray-300">
+          {isBashTool ? '$ ' : ''}{tool.name}
+        </span>
         <span className="text-xs text-gray-500">{expanded ? '\u25B2' : '\u25BC'}</span>
       </div>
       {expanded && (
         <div className="border-t border-gray-700 px-3 py-2 space-y-2">
-          <div>
-            <div className="text-xs text-gray-500 mb-1">Input</div>
-            <pre className="text-xs text-gray-400 whitespace-pre-wrap break-words bg-gray-900 rounded p-2">
-              {tool.input}
-            </pre>
-          </div>
-          <div>
-            <div className="text-xs text-gray-500 mb-1">Result</div>
-            <pre className="text-xs text-gray-400 whitespace-pre-wrap break-words bg-gray-900 rounded p-2">
-              {tool.result}
-            </pre>
-          </div>
+          {isBashTool ? (
+            <div className="bg-black rounded p-3 font-mono text-xs text-green-400 whitespace-pre-wrap break-words max-h-64 overflow-y-auto">
+              <div className="text-gray-500 mb-1">$ {bashCommand}</div>
+              <div>{bashOutput}</div>
+            </div>
+          ) : (
+            <>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Input</div>
+                <pre className="text-xs text-gray-400 whitespace-pre-wrap break-words bg-gray-900 rounded p-2">
+                  {tool.input}
+                </pre>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Result</div>
+                <pre className="text-xs text-gray-400 whitespace-pre-wrap break-words bg-gray-900 rounded p-2">
+                  {tool.result}
+                </pre>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

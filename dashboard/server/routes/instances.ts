@@ -246,12 +246,14 @@ router.post('/spin-up', async (req, res) => {
     // 1. Add to validExtensions array
     // 2. Add to extPrefixes map
     // ==========================================
-    const validExtensions = ['continue', 'cline', 'vibe'];
+    const validExtensions = ['continue', 'cline', 'vibe', 'loclaude-lite', 'loclaude'];
 
     const extPrefixes: Record<string, string> = {
       continue: 'ct',
       cline: 'cl',
       vibe: 'vb',
+      'loclaude-lite': 'll',
+      loclaude: 'lc',
     };
 
     if (!validExtensions.includes(extension)) {

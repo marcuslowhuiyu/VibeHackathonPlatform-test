@@ -49,6 +49,9 @@ export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
 export AWS_DEFAULT_REGION="${AWS_REGION}"
 export AWS_REGION="${AWS_REGION}"
 
+# Increase Node.js heap limit for Cline extension host (default ~2GB is insufficient)
+export NODE_OPTIONS="--max-old-space-size=3072"
+
 # Read settings from config file
 if [ -f "$CONFIG_FILE" ]; then
     API_MODEL_ID=$(jq -r '.apiModelId // "anthropic.claude-sonnet-4-20250514-v1:0"' "$CONFIG_FILE")

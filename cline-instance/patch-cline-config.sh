@@ -23,44 +23,50 @@ echo "Patching Cline extension.js for auto-config..."
 cat >> "$EXT_JS" << 'SHIM_EOF'
 
 // === AUTO-CONFIG SHIM (injected at build time) ===
+// esbuild exports activate/deactivate as getter-only properties (no setter),
+// so we must replace module.exports entirely instead of assigning to it.
 ;(function() {
-    const origActivate = module.exports.activate;
+    var origActivate = module.exports.activate;
+    var origDeactivate = module.exports.deactivate;
     if (typeof origActivate !== 'function') return;
 
-    module.exports.activate = async function(context) {
-        try {
-            const fs = require('fs');
-            const configPath = '/home/workspace/cline-config.json';
+    module.exports = {
+        activate: async function(context) {
+            try {
+                var fs = require('fs');
+                var configPath = '/home/workspace/cline-config.json';
 
-            // Only apply if globalState has no provider set (first launch)
-            const existing = context.globalState.get('actModeApiProvider');
-            if (!existing) {
-                if (fs.existsSync(configPath)) {
-                    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-                    const region = config.awsRegion || 'ap-southeast-1';
-                    const modelId = config.apiModelId || 'anthropic.claude-sonnet-4-20250514-v1:0';
+                // Only apply if globalState has no provider set (first launch)
+                var existing = context.globalState.get('actModeApiProvider');
+                if (!existing) {
+                    if (fs.existsSync(configPath)) {
+                        var config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                        var region = config.awsRegion || 'ap-southeast-1';
+                        var modelId = config.apiModelId || 'anthropic.claude-sonnet-4-20250514-v1:0';
 
-                    await context.globalState.update('actModeApiProvider', 'bedrock');
-                    await context.globalState.update('planModeApiProvider', 'bedrock');
-                    await context.globalState.update('actModeApiModelId', modelId);
-                    await context.globalState.update('planModeApiModelId', modelId);
-                    await context.globalState.update('awsRegion', region);
-                    await context.globalState.update('awsAuthentication', 'profile');
-                    await context.globalState.update('awsUseProfile', true);
-                    await context.globalState.update('awsProfile', 'default');
+                        await context.globalState.update('actModeApiProvider', 'bedrock');
+                        await context.globalState.update('planModeApiProvider', 'bedrock');
+                        await context.globalState.update('actModeApiModelId', modelId);
+                        await context.globalState.update('planModeApiModelId', modelId);
+                        await context.globalState.update('awsRegion', region);
+                        await context.globalState.update('awsAuthentication', 'profile');
+                        await context.globalState.update('awsUseProfile', true);
+                        await context.globalState.update('awsProfile', 'default');
 
-                    console.log('[cline-autoconfig] Bedrock config applied: region=' + region + ' model=' + modelId);
+                        console.log('[cline-autoconfig] Bedrock config applied: region=' + region + ' model=' + modelId);
+                    } else {
+                        console.log('[cline-autoconfig] No config file at ' + configPath + ', skipping');
+                    }
                 } else {
-                    console.log('[cline-autoconfig] No config file at ' + configPath + ', skipping');
+                    console.log('[cline-autoconfig] globalState already configured (provider=' + existing + '), skipping');
                 }
-            } else {
-                console.log('[cline-autoconfig] globalState already configured (provider=' + existing + '), skipping');
+            } catch (err) {
+                console.error('[cline-autoconfig] Failed to apply config:', err);
             }
-        } catch (err) {
-            console.error('[cline-autoconfig] Failed to apply config:', err);
-        }
 
-        return origActivate.call(this, context);
+            return origActivate.call(this, context);
+        },
+        deactivate: origDeactivate
     };
 })();
 // === END AUTO-CONFIG SHIM ===

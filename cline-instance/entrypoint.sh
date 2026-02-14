@@ -66,8 +66,6 @@ fi
 # ==========================================
 echo "Configuring Cline extension..."
 
-# Cline stores its configuration in VS Code's globalState
-# We configure it via VS Code settings and let Cline pick it up
 CLINE_DIR="$HOME/.cline"
 mkdir -p "$CLINE_DIR"
 
@@ -77,6 +75,30 @@ cat > "$CLINE_DIR/cline_mcp_settings.json" << EOF
   "mcpServers": {}
 }
 EOF
+
+# Pre-seed Cline's globalState in VS Code's SQLite state database.
+# This runs BEFORE VS Code starts, so the extension sees the config on first load.
+# Try both known state database locations (varies by VS Code / OpenVSCode version)
+VSCODE_STATE_DIR="/home/.openvscode-server/data/User"
+mkdir -p "$VSCODE_STATE_DIR"
+mkdir -p "$VSCODE_STATE_DIR/globalStorage"
+
+# VS Code stores all extension globalState under a single key as a JSON blob.
+# Key format: memento/<extensionId>  Value: JSON object with all state values.
+CLINE_STATE_JSON=$(cat <<JSONEOF
+{"actModeApiProvider":"bedrock","planModeApiProvider":"bedrock","actModeApiModelId":"${API_MODEL_ID}","planModeApiModelId":"${API_MODEL_ID}","awsRegion":"${AWS_REGION}"}
+JSONEOF
+)
+
+echo "  Writing Cline config to VS Code state database..."
+for STATE_DB in "$VSCODE_STATE_DIR/state.vscdb" "$VSCODE_STATE_DIR/globalStorage/state.vscdb"; do
+    sqlite3 "$STATE_DB" <<SQLEOF
+CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value TEXT);
+INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('memento/saoudrizwan.claude-dev', '${CLINE_STATE_JSON}');
+SQLEOF
+    echo "  Wrote to: $STATE_DB"
+done
+echo "  Cline globalState pre-seeded via SQLite"
 
 echo "  Cline configured for AWS Bedrock"
 echo "    Model: ${API_MODEL_ID}"

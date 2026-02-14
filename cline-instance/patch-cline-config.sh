@@ -49,9 +49,10 @@ cat >> "$EXT_JS" << 'SHIM_EOF'
                         await context.globalState.update('actModeApiModelId', modelId);
                         await context.globalState.update('planModeApiModelId', modelId);
                         await context.globalState.update('awsRegion', region);
-                        await context.globalState.update('awsAuthentication', 'profile');
-                        await context.globalState.update('awsUseProfile', true);
-                        await context.globalState.update('awsProfile', 'default');
+                        // Do NOT set awsAuthentication/awsUseProfile/awsProfile —
+                        // leaving them unset lets Cline use the default AWS SDK
+                        // credential chain, which picks up ECS task role credentials
+                        // via fromContainerMetadata.
 
                         console.log('[cline-autoconfig] Bedrock config applied: region=' + region + ' model=' + modelId);
                     } else {

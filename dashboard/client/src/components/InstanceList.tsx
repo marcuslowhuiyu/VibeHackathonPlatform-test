@@ -510,10 +510,25 @@ export default function InstanceList({ instances }: InstanceListProps) {
                       </a>
                     </>
                   ) : (
-                    <span className="text-gray-400 text-sm">
-                      {['provisioning', 'pending'].includes(instance.status.toLowerCase())
-                        ? 'Starting up...'
-                        : 'No URLs available'}
+                    <span className="text-sm flex items-center gap-2">
+                      {instance.status.toLowerCase() === 'provisioning' ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin text-yellow-400" />
+                          <span className="text-yellow-400">Creating container...</span>
+                        </>
+                      ) : instance.status.toLowerCase() === 'pending' ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin text-yellow-400" />
+                          <span className="text-yellow-400">Starting services...</span>
+                        </>
+                      ) : instance.status.toLowerCase() === 'running' ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
+                          <span className="text-blue-400">Registering with load balancer...</span>
+                        </>
+                      ) : (
+                        <span className="text-gray-400">No URLs available</span>
+                      )}
                     </span>
                   )}
                   {/* CloudFront deploying indicator */}

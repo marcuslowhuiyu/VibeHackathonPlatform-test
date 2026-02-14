@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { QueryClient, QueryClientProvider, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Settings, Server, RefreshCw, Wrench, Users, LogOut } from 'lucide-react'
 import ConfigForm from './components/ConfigForm'
 import InstanceList from './components/InstanceList'
@@ -16,8 +16,7 @@ import { useAuth } from './hooks/useAuth'
 type Tab = 'instances' | 'participants' | 'settings' | 'setup'
 type Route = 'landing' | 'login' | 'admin'
 
-// Create a query client outside of the component
-const queryClient = new QueryClient()
+// QueryClient is provided by main.tsx — no need to create a second one
 
 function getRouteFromHash(): Route {
   const hash = window.location.hash.slice(1) // Remove the '#'
@@ -39,6 +38,14 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
   const { data: instances = [], isLoading: instancesLoading } = useQuery({
     queryKey: ['instances'],
     queryFn: api.getInstances,
+    refetchInterval: (query) => {
+      const data = query.state.data as typeof instances | undefined
+      const hasStarting = data?.some(i =>
+        ['provisioning', 'pending'].includes(i.status.toLowerCase()) ||
+        (i.status.toLowerCase() === 'running' && !i.vscode_url)
+      )
+      return hasStarting ? 2000 : 5000
+    },
   })
 
   const { data: setupStatus } = useQuery({
@@ -255,11 +262,7 @@ function AppContent() {
 }
 
 function App() {
-  return (
-    <QueryClientProvider client={queryClient}>
-      <AppContent />
-    </QueryClientProvider>
-  )
+  return <AppContent />
 }
 
 export default App

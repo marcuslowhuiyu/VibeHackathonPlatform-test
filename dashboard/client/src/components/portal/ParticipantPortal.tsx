@@ -32,7 +32,14 @@ export default function ParticipantPortal({ user, onLogout }: ParticipantPortalP
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['my-instance'],
     queryFn: api.getMyInstance,
-    refetchInterval: 10000, // Refresh every 10 seconds
+    refetchInterval: (query) => {
+      const result = query.state.data as typeof data | undefined
+      const instance = result?.instance
+      if (!instance) return 3000 // No instance yet — poll fast
+      const isStarting = ['provisioning', 'pending'].includes(instance.status.toLowerCase()) ||
+        (instance.status.toLowerCase() === 'running' && !instance.vscode_url)
+      return isStarting ? 3000 : 10000
+    },
   })
 
   const changePasswordMutation = useMutation({
@@ -233,7 +240,11 @@ export default function ParticipantPortal({ user, onLogout }: ParticipantPortalP
                 <div className="text-left">
                   <div className="font-semibold text-lg">Open {studioLabel}</div>
                   <div className="text-sm opacity-75">
-                    {instance.vscode_url ? studioSubtext : 'Waiting for instance...'}
+                    {instance.vscode_url ? studioSubtext
+                      : instance.status.toLowerCase() === 'provisioning' ? 'Creating container...'
+                      : instance.status.toLowerCase() === 'pending' ? 'Starting services...'
+                      : instance.status.toLowerCase() === 'running' ? 'Registering with load balancer...'
+                      : 'Waiting for instance...'}
                   </div>
                 </div>
                 <ExternalLink className="w-5 h-5 ml-auto" />

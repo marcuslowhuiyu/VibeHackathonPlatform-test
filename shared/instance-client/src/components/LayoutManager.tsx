@@ -1,4 +1,4 @@
-import { useState, useEffect, ReactNode } from 'react';
+import { useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 
 type LayoutMode = 'full' | 'panel' | 'tabs';
 
@@ -14,12 +14,60 @@ function getAutoMode(width: number): LayoutMode {
   return 'tabs';
 }
 
+function DragHandle({ onDrag }: { onDrag: (deltaX: number) => void }) {
+  const dragging = useRef(false);
+  const lastX = useRef(0);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragging.current = true;
+    lastX.current = e.clientX;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!dragging.current) return;
+      const delta = ev.clientX - lastX.current;
+      lastX.current = ev.clientX;
+      onDrag(delta);
+    };
+
+    const onMouseUp = () => {
+      dragging.current = false;
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [onDrag]);
+
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      className="w-1 shrink-0 cursor-col-resize bg-gray-800 hover:bg-blue-500 transition-colors relative group"
+      title="Drag to resize"
+    >
+      <div className="absolute inset-y-0 -left-1 -right-1" />
+    </div>
+  );
+}
+
 export default function LayoutManager({ chatPanel, previewPanel, codePanel }: LayoutManagerProps) {
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const [manualMode, setManualMode] = useState<LayoutMode | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'chat' | 'preview' | 'code'>('preview');
   const [dropdownOpen, setDropdownOpen] = useState(false);
+
+  // Column widths as percentages [chat, preview, code]
+  const [colWidths, setColWidths] = useState<[number, number, number]>([25, 50, 25]);
+  // Panel mode split as percentage for left panel
+  const [panelSplit, setPanelSplit] = useState(70);
+
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
@@ -29,6 +77,38 @@ export default function LayoutManager({ chatPanel, previewPanel, codePanel }: La
 
   const autoMode = getAutoMode(windowWidth);
   const mode = manualMode ?? autoMode;
+
+  // Drag handler for the divider between chat and preview (index 0)
+  const handleDragLeft = useCallback((deltaX: number) => {
+    if (!containerRef.current) return;
+    const totalWidth = containerRef.current.offsetWidth;
+    const deltaPct = (deltaX / totalWidth) * 100;
+    setColWidths(prev => {
+      const newChat = Math.max(10, Math.min(60, prev[0] + deltaPct));
+      const newPreview = Math.max(10, Math.min(80, prev[1] - deltaPct));
+      return [newChat, newPreview, prev[2]];
+    });
+  }, []);
+
+  // Drag handler for the divider between preview and code (index 1)
+  const handleDragRight = useCallback((deltaX: number) => {
+    if (!containerRef.current) return;
+    const totalWidth = containerRef.current.offsetWidth;
+    const deltaPct = (deltaX / totalWidth) * 100;
+    setColWidths(prev => {
+      const newPreview = Math.max(10, Math.min(80, prev[1] + deltaPct));
+      const newCode = Math.max(10, Math.min(60, prev[2] - deltaPct));
+      return [prev[0], newPreview, newCode];
+    });
+  }, []);
+
+  // Drag handler for the panel mode divider
+  const handleDragPanel = useCallback((deltaX: number) => {
+    if (!containerRef.current) return;
+    const totalWidth = containerRef.current.offsetWidth;
+    const deltaPct = (deltaX / totalWidth) * 100;
+    setPanelSplit(prev => Math.max(30, Math.min(85, prev + deltaPct)));
+  }, []);
 
   const modeLabels: Record<LayoutMode, string> = {
     full: 'Full (3-col)',
@@ -72,12 +152,14 @@ export default function LayoutManager({ chatPanel, previewPanel, codePanel }: La
 
   if (mode === 'full') {
     return (
-      <div className="h-screen w-screen bg-gray-900 text-white">
+      <div ref={containerRef} className="h-screen w-screen bg-gray-900 text-white">
         {layoutToggle}
-        <div className="h-full grid" style={{ gridTemplateColumns: '25% 50% 25%' }}>
-          <div className="h-full border-r border-gray-800 overflow-hidden">{chatPanel}</div>
-          <div className="h-full border-r border-gray-800 overflow-hidden">{previewPanel}</div>
-          <div className="h-full overflow-hidden">{codePanel}</div>
+        <div className="h-full flex">
+          <div className="h-full overflow-hidden" style={{ width: `${colWidths[0]}%` }}>{chatPanel}</div>
+          <DragHandle onDrag={handleDragLeft} />
+          <div className="h-full overflow-hidden" style={{ width: `${colWidths[1]}%` }}>{previewPanel}</div>
+          <DragHandle onDrag={handleDragRight} />
+          <div className="h-full overflow-hidden" style={{ width: `${colWidths[2]}%` }}>{codePanel}</div>
         </div>
       </div>
     );
@@ -85,39 +167,39 @@ export default function LayoutManager({ chatPanel, previewPanel, codePanel }: La
 
   if (mode === 'panel') {
     return (
-      <div className="h-screen w-screen bg-gray-900 text-white">
+      <div ref={containerRef} className="h-screen w-screen bg-gray-900 text-white">
         {layoutToggle}
-        <div
-          className="h-full grid"
-          style={{
-            gridTemplateColumns: sidebarOpen ? '70% 30%' : '100%',
-          }}
-        >
-          <div className="h-full border-r border-gray-800 overflow-hidden">{previewPanel}</div>
+        <div className="h-full flex">
+          <div className="h-full overflow-hidden" style={{ width: sidebarOpen ? `${panelSplit}%` : '100%' }}>
+            {previewPanel}
+          </div>
           {sidebarOpen && (
-            <div className="h-full overflow-hidden flex flex-col">
-              <div className="flex border-b border-gray-800">
-                <button
-                  onClick={() => setActiveTab('chat')}
-                  className={`flex-1 px-3 py-2 text-xs font-medium ${
-                    activeTab === 'chat' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400'
-                  }`}
-                >
-                  Chat
-                </button>
-                <button
-                  onClick={() => setActiveTab('code')}
-                  className={`flex-1 px-3 py-2 text-xs font-medium ${
-                    activeTab === 'code' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400'
-                  }`}
-                >
-                  Code
-                </button>
+            <>
+              <DragHandle onDrag={handleDragPanel} />
+              <div className="h-full overflow-hidden flex flex-col" style={{ width: `${100 - panelSplit}%` }}>
+                <div className="flex border-b border-gray-800">
+                  <button
+                    onClick={() => setActiveTab('chat')}
+                    className={`flex-1 px-3 py-2 text-xs font-medium ${
+                      activeTab === 'chat' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400'
+                    }`}
+                  >
+                    Chat
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('code')}
+                    className={`flex-1 px-3 py-2 text-xs font-medium ${
+                      activeTab === 'code' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400'
+                    }`}
+                  >
+                    Code
+                  </button>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  {activeTab === 'chat' ? chatPanel : codePanel}
+                </div>
               </div>
-              <div className="flex-1 overflow-hidden">
-                {activeTab === 'chat' ? chatPanel : codePanel}
-              </div>
-            </div>
+            </>
           )}
         </div>
         <button

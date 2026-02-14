@@ -19,10 +19,8 @@ export default defineConfig({
 })
 VITEEOF
 
-  # Configure Tailwind CSS in index.css
-  cat > src/index.css << 'CSSEOF'
-@import "tailwindcss";
-CSSEOF
+  # Prepend Tailwind CSS import to existing index.css (preserves default Vite styles)
+  { echo '@import "tailwindcss";'; cat src/index.css; } > /tmp/index.css && mv /tmp/index.css src/index.css
 
   echo "Project scaffolded successfully"
 fi

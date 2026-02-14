@@ -235,6 +235,20 @@ export default function InstanceList({ instances }: InstanceListProps) {
 
   const stopMutation = useMutation({
     mutationFn: api.stopInstance,
+    onMutate: async (id: string) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['instances'] })
+      // Optimistically update to 'stopping'
+      queryClient.setQueryData<{ instances: Instance[] }>(['instances'], (old) => {
+        if (!old) return old
+        return {
+          ...old,
+          instances: old.instances.map((inst) =>
+            inst.id === id ? { ...inst, status: 'stopping' } : inst
+          ),
+        }
+      })
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['instances'] })
     },

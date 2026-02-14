@@ -10,7 +10,7 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 import fs from "fs/promises";
 import path from "path";
-import { executeTool, TOOL_DEFINITIONS } from "./tools.js";
+import { executeTool, TOOL_DEFINITIONS, resetReadTracking } from "./tools.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -24,32 +24,46 @@ function getDefaultModelId(): string {
   return `${prefix}.anthropic.claude-sonnet-4-20250514-v1:0`;
 }
 const MODEL_ID = process.env.BEDROCK_MODEL_ID || getDefaultModelId();
-const MAX_ITERATIONS = 25; // safety limit to prevent infinite loops
+const MAX_ITERATIONS = 30; // slightly higher than vibe's 25 — Claude Code tasks tend to be more complex
 
 // ---------------------------------------------------------------------------
-// System prompts
+// System prompt (Claude Code-style)
 // ---------------------------------------------------------------------------
 
 function buildSystemPrompt(repoMap?: string): string {
-  const basePrompt = `You are a friendly AI coding assistant helping a hackathon participant build a React web app.
+  const basePrompt = `You are a friendly AI coding assistant helping a hackathon participant build a React web app. You take pride in producing beautiful, polished interfaces that look production-ready.
+
+Styling:
+- Always use Tailwind CSS utility classes for styling. Every component should be visually polished — never leave elements unstyled or with default browser styling.
+- Ensure layouts are well-centered with proper spacing (p-4, gap-4, etc.), padding, and responsive design.
+- Use a clean, consistent color palette. Prefer rounded corners, subtle shadows, and comfortable whitespace.
+- Keep code simple and approachable. Prefer clean, readable component structures over clever abstractions.
+
+Capabilities:
+- Bash: Execute any shell command. Working directory persists between calls. Use for npm, git, tests, builds.
+- Read: Read files with optional offset/limit for large files.
+- Write: Create or overwrite files. You must Read a file before Writing to it (unless creating new).
+- Edit: Find-and-replace exact strings in files. The match must be unique.
+- Glob: Find files by pattern (e.g. "**/*.tsx").
+- Grep: Search file contents with regex. Supports context lines and output modes.
+- ListDir: List directory contents.
+- Task: Spawn a sub-agent for independent work. Use when tasks can run in parallel.
 
 Live Preview:
 - A Vite dev server is ALREADY running on port 3000 with hot module replacement (HMR). Do NOT start another dev server or run "npm run dev" / "npx vite". Your file changes are automatically reflected in the live preview.
-- If the preview seems stuck, use the restart_preview tool or ask the user to refresh.
+- If the preview seems stuck, use the restart_preview tool (if available) or ask the user to refresh.
 
-Key rules:
-- You can only read and modify files within the project directory.
-- Always explain what you are doing in clear terms before and after making changes.
-- Keep code simple and approachable. Avoid overly clever patterns.
-- After making changes to code, remind the user to check the live preview to see the results.
-- When creating new files, also make sure they are properly imported where needed.
-- If something goes wrong, explain the error in plain language and suggest a fix.
-- You can be slightly more technical in explanations, but still keep things clear and approachable.`;
+Rules:
+- Explain what you're doing briefly, then act.
+- After code changes, remind the user to check the live preview.
+- Use Bash to install packages, run tests, and manage git — but NEVER to start a dev server.
+- Use Glob/Grep to understand the codebase before making changes.
+- When creating files, ensure proper imports.
+- If something goes wrong, explain the error in plain language and fix it.`;
 
   if (repoMap) {
-    return `${basePrompt}\n\nHere is a map of the current project files for reference:\n<repo-map>\n${repoMap}\n</repo-map>`;
+    return `${basePrompt}\n\nProject structure:\n<repo-map>\n${repoMap}\n</repo-map>`;
   }
-
   return basePrompt;
 }
 
@@ -73,7 +87,7 @@ function bedrockTools(): Tool[] {
 // Agent events (for typing reference)
 // ---------------------------------------------------------------------------
 //
-// "agent:thinking"     — { text: string }           model is producing text
+// "agent:thinking"     — { text: string }           model is producing text (streaming)
 // "agent:text"         — { text: string }           final text block from the model
 // "agent:tool_call"    — { toolUseId, name, input } model wants to call a tool
 // "agent:tool_result"  — { toolUseId, name, result} tool execution finished
@@ -81,8 +95,8 @@ function bedrockTools(): Tool[] {
 // "agent:error"        — { error: string }          something went wrong
 // ---------------------------------------------------------------------------
 
-// Tools that modify files on disk
-const FILE_MUTATING_TOOLS = new Set(["write_file", "edit_file"]);
+// Tools that modify files on disk (PascalCase to match loclaude tool names)
+const FILE_MUTATING_TOOLS = new Set(["Write", "Edit"]);
 
 // ---------------------------------------------------------------------------
 // AgentLoop class
@@ -103,6 +117,11 @@ export class AgentLoop extends EventEmitter {
   // Public API
   // -------------------------------------------------------------------------
 
+  /** Update the repo map used in the system prompt. */
+  updateRepoMap(newMap: string): void {
+    this.repoMap = newMap;
+  }
+
   async processMessage(userMessage: string): Promise<void> {
     // Append the user message to conversation history
     this.conversationHistory.push({
@@ -119,6 +138,31 @@ export class AgentLoop extends EventEmitter {
   }
 
   // -------------------------------------------------------------------------
+  // Sub-agent execution (Task tool)
+  // -------------------------------------------------------------------------
+
+  private async executeSubTask(prompt: string): Promise<string> {
+    // Create a child agent loop with the same repo map but fresh conversation.
+    // Note: sub-agents share the same tool module state (read tracking, shell cwd).
+    // resetReadTracking is available if isolation is needed in the future.
+    const subAgent = new AgentLoop(this.repoMap);
+    let result = '';
+
+    return new Promise<string>((resolve) => {
+      subAgent.on('agent:text', (data: { text: string }) => {
+        result += data.text;
+      });
+      subAgent.on('agent:error', (data: { error: string }) => {
+        resolve(`Sub-agent error: ${data.error}`);
+      });
+
+      subAgent.processMessage(prompt)
+        .then(() => resolve(result || '(sub-agent produced no text output)'))
+        .catch((err: Error) => resolve(`Sub-agent failed: ${err.message}`));
+    });
+  }
+
+  // -------------------------------------------------------------------------
   // Core agent loop
   // -------------------------------------------------------------------------
 
@@ -126,12 +170,23 @@ export class AgentLoop extends EventEmitter {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       const systemPrompt = buildSystemPrompt(this.repoMap);
 
+      // Build the ConverseStream command with extended thinking enabled.
+      // max_tokens must be greater than thinking.budget_tokens.
       const command = new ConverseStreamCommand({
         modelId: MODEL_ID,
         system: [{ text: systemPrompt }] as SystemContentBlock[],
         messages: this.conversationHistory,
+        inferenceConfig: {
+          maxTokens: 16384,
+        },
         toolConfig: {
           tools: bedrockTools(),
+        },
+        additionalModelRequestFields: {
+          thinking: {
+            type: "enabled",
+            budget_tokens: 8192,
+          },
         },
       });
 
@@ -144,24 +199,49 @@ export class AgentLoop extends EventEmitter {
       // ---- Parse the streaming response ----
       if (response.stream) {
         let currentText = "";
+        let currentThinking = "";
+        let currentThinkingSignature = "";
+        let currentBlockType: "thinking" | "text" | "toolUse" = "text";
         let currentToolUseId: string | undefined;
         let currentToolName: string | undefined;
         let currentToolInputJson = "";
 
         for await (const event of response.stream as AsyncIterable<ConverseStreamOutput>) {
+          // -- Content block start --
+          if (event.contentBlockStart !== undefined) {
+            if (event.contentBlockStart.start?.toolUse) {
+              currentBlockType = "toolUse";
+              const toolStart = event.contentBlockStart.start.toolUse;
+              currentToolUseId = toolStart.toolUseId;
+              currentToolName = toolStart.name;
+              currentToolInputJson = "";
+            } else {
+              // Will be determined by the first delta (thinking vs text)
+              currentBlockType = "text";
+            }
+          }
+
+          // -- Reasoning/thinking delta (text chunks + signature) --
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const reasoningDelta = (event.contentBlockDelta?.delta as any)?.reasoningContent as
+            | { text?: string; signature?: string }
+            | undefined;
+          if (reasoningDelta) {
+            currentBlockType = "thinking";
+            if (reasoningDelta.text) {
+              currentThinking += reasoningDelta.text;
+              this.emit("agent:thinking", { text: reasoningDelta.text });
+            }
+            if (reasoningDelta.signature) {
+              currentThinkingSignature = reasoningDelta.signature;
+            }
+          }
+
           // -- Text delta --
           if (event.contentBlockDelta?.delta?.text) {
             const chunk = event.contentBlockDelta.delta.text;
             currentText += chunk;
             this.emit("agent:thinking", { text: chunk });
-          }
-
-          // -- Tool use start --
-          if (event.contentBlockStart?.start?.toolUse) {
-            const toolStart = event.contentBlockStart.start.toolUse;
-            currentToolUseId = toolStart.toolUseId;
-            currentToolName = toolStart.name;
-            currentToolInputJson = "";
           }
 
           // -- Tool input delta --
@@ -172,7 +252,7 @@ export class AgentLoop extends EventEmitter {
 
           // -- Content block stop --
           if (event.contentBlockStop !== undefined) {
-            if (currentToolUseId && currentToolName) {
+            if (currentBlockType === "toolUse" && currentToolUseId && currentToolName) {
               // Finalize tool use block
               let parsedInput: Record<string, unknown> = {};
               try {
@@ -193,11 +273,24 @@ export class AgentLoop extends EventEmitter {
               currentToolUseId = undefined;
               currentToolName = undefined;
               currentToolInputJson = "";
+            } else if (currentBlockType === "thinking" && currentThinking) {
+              // Finalize thinking/reasoning block with signature for conversation history
+              assistantContent.push({
+                reasoningContent: {
+                  reasoningText: {
+                    text: currentThinking,
+                    signature: currentThinkingSignature || undefined,
+                  },
+                },
+              } as ContentBlock);
+              currentThinking = "";
+              currentThinkingSignature = "";
             } else if (currentText) {
               // Finalize text block
               assistantContent.push({ text: currentText });
               currentText = "";
             }
+            currentBlockType = "text";
           }
 
           // -- Message stop --
@@ -236,11 +329,19 @@ export class AgentLoop extends EventEmitter {
             input,
           });
 
-          // Execute the tool
-          const result = await executeTool(
-            name!,
-            (input as Record<string, unknown>) ?? {},
-          );
+          let result: string;
+
+          // Intercept the Task tool — handle sub-agents inside the loop
+          if (name === "Task") {
+            const taskPrompt = (input as Record<string, unknown>).prompt as string;
+            result = await this.executeSubTask(taskPrompt);
+          } else {
+            // Execute the tool normally
+            result = await executeTool(
+              name!,
+              (input as Record<string, unknown>) ?? {},
+            );
+          }
 
           this.emit("agent:tool_result", {
             toolUseId,
@@ -251,22 +352,21 @@ export class AgentLoop extends EventEmitter {
           // Emit file_changed for mutating tools, including file content
           if (FILE_MUTATING_TOOLS.has(name!)) {
             const toolInput = input as Record<string, unknown>;
-            if (toolInput.path) {
-              // For write_file, content is in the tool input.
-              // For edit_file, read the file after the edit.
+            const filePath = toolInput.file_path as string | undefined;
+            if (filePath) {
               let fileContent: string | undefined;
-              if (name === "write_file") {
+              if (name === "Write") {
                 fileContent = toolInput.content as string;
               } else {
                 try {
-                  const resolved = path.resolve("/home/workspace/project", toolInput.path as string);
+                  const resolved = path.resolve("/home/workspace/project", filePath);
                   fileContent = await fs.readFile(resolved, "utf-8");
                 } catch {
                   // If read fails, emit without content
                 }
               }
               this.emit("agent:file_changed", {
-                path: toolInput.path as string,
+                path: filePath,
                 content: fileContent,
               });
             }

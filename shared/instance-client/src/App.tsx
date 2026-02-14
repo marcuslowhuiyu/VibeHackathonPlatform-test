@@ -7,7 +7,7 @@ import ElementHighlighter from './components/ElementHighlighter';
 
 interface FileEntry {
   path: string;
-  content: string;
+  type: string;
 }
 
 export default function App() {
@@ -17,6 +17,7 @@ export default function App() {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [previewRefreshKey, setPreviewRefreshKey] = useState(0);
+  const [inspectorEnabled, setInspectorEnabled] = useState(true);
 
   // Fetch project files
   const fetchFiles = useCallback(() => {
@@ -47,17 +48,45 @@ export default function App() {
     }
   }, [currentFileChange, fetchFiles]);
 
-  // Preview URL: behind ALB, port 3000 is unreachable. Use the /preview proxy.
-  // In local dev (no basePath), use port 3000 directly.
+  // Preview URL: always use the /preview/ proxy to keep the iframe same-origin.
   // Trailing slash is critical: it makes the browser resolve relative URLs
   // from /i/{id}/preview/ rather than /i/{id}/, keeping them routable through the ALB.
-  const previewUrl = basePath
-    ? `${window.location.origin}${basePath}/preview/`
-    : `${window.location.protocol}//${window.location.hostname}:3000`;
+  const previewUrl = `${window.location.origin}${basePath}/preview/`;
 
   const handleSelectFile = useCallback((path: string) => {
     setActiveFile(path);
   }, []);
+
+  const previewPanel = inspectorEnabled ? (
+    <ElementHighlighter
+      previewUrl={previewUrl}
+      onElementClick={sendElementClick}
+      refreshKey={previewRefreshKey}
+      basePath={basePath}
+      onToggleInspector={() => setInspectorEnabled(false)}
+    />
+  ) : (
+    <div className="h-full flex flex-col bg-gray-900">
+      <div className="h-10 shrink-0 bg-gray-800 border-b border-gray-700 flex items-center px-3 gap-3">
+        <button
+          onClick={() => setInspectorEnabled(true)}
+          className="px-2 py-1 text-xs font-medium text-gray-400 bg-gray-700 rounded hover:bg-gray-600 hover:text-blue-400 transition-colors"
+        >
+          Enable Inspector
+        </button>
+        <span className="text-xs text-gray-500">Preview Only</span>
+      </div>
+      <div className="flex-1 overflow-hidden">
+        <iframe
+          key={previewRefreshKey}
+          src={previewUrl}
+          className="w-full h-full bg-white border-none"
+          title="Live Preview"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        />
+      </div>
+    </div>
+  );
 
   return (
     <LayoutManager
@@ -69,19 +98,14 @@ export default function App() {
           isThinking={isThinking}
         />
       }
-      previewPanel={
-        <ElementHighlighter
-          previewUrl={previewUrl}
-          onElementClick={sendElementClick}
-          refreshKey={previewRefreshKey}
-        />
-      }
+      previewPanel={previewPanel}
       codePanel={
         <CodeViewer
-          files={files}
+          files={files.filter(f => f.type === 'file')}
           activeFile={activeFile}
           onSelectFile={handleSelectFile}
           fileChange={currentFileChange}
+          basePath={basePath}
         />
       }
     />

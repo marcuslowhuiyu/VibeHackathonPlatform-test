@@ -1,9 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import Editor from '@monaco-editor/react';
 
 interface FileEntry {
   path: string;
-  content: string;
 }
 
 interface FileChange {
@@ -16,6 +15,7 @@ interface CodeViewerProps {
   activeFile: string | null;
   onSelectFile: (path: string) => void;
   fileChange: FileChange | null;
+  basePath: string;
 }
 
 function getFileName(path: string): string {
@@ -67,65 +67,43 @@ function getLanguage(path: string): string {
   }
 }
 
-export default function CodeViewer({ files, activeFile, onSelectFile, fileChange }: CodeViewerProps) {
+export default function CodeViewer({ files, activeFile, onSelectFile, fileChange, basePath }: CodeViewerProps) {
   const [displayContent, setDisplayContent] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const typewriterRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const targetContentRef = useRef('');
-  const charIndexRef = useRef(0);
 
-  // Handle fileChange: auto-switch and typewriter effect
+  // Handle fileChange: auto-switch and show content immediately
   useEffect(() => {
     if (!fileChange) return;
 
     // Auto-switch to the changed file
     onSelectFile(fileChange.path);
 
-    // Clear any existing typewriter
-    if (typewriterRef.current) {
-      clearInterval(typewriterRef.current);
+    // Show content immediately from the event
+    if (fileChange.content) {
+      setDisplayContent(fileChange.content);
     }
-
-    // Start typewriter effect
-    targetContentRef.current = fileChange.content;
-    charIndexRef.current = 0;
-    setDisplayContent('');
-    setIsTyping(true);
-
-    typewriterRef.current = setInterval(() => {
-      charIndexRef.current += 1;
-      const nextContent = targetContentRef.current.slice(0, charIndexRef.current);
-      setDisplayContent(nextContent);
-
-      if (charIndexRef.current >= targetContentRef.current.length) {
-        if (typewriterRef.current) {
-          clearInterval(typewriterRef.current);
-          typewriterRef.current = null;
-        }
-        setIsTyping(false);
-      }
-    }, 15);
-
-    return () => {
-      if (typewriterRef.current) {
-        clearInterval(typewriterRef.current);
-        typewriterRef.current = null;
-      }
-    };
   }, [fileChange]);
 
-  // When manually selecting a file (not via typewriter), show full content
+  // When activeFile changes, fetch its content on demand
   useEffect(() => {
-    if (isTyping) return;
     if (!activeFile) {
       setDisplayContent('');
       return;
     }
-    const file = files.find((f) => f.path === activeFile);
-    if (file) {
-      setDisplayContent(file.content);
+    // If the fileChange just set content for this file, skip the fetch
+    if (fileChange?.path === activeFile && fileChange?.content) {
+      return;
     }
-  }, [activeFile, files, isTyping]);
+    fetch(`${basePath}/api/file/${activeFile}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.content) {
+          setDisplayContent(data.content);
+        }
+      })
+      .catch(() => {
+        setDisplayContent('// Failed to load file');
+      });
+  }, [activeFile, basePath]);
 
   const activeLanguage = activeFile ? getLanguage(activeFile) : 'plaintext';
 
@@ -140,14 +118,7 @@ export default function CodeViewer({ files, activeFile, onSelectFile, fileChange
           {files.map((file) => (
             <button
               key={file.path}
-              onClick={() => {
-                if (isTyping && typewriterRef.current) {
-                  clearInterval(typewriterRef.current);
-                  typewriterRef.current = null;
-                  setIsTyping(false);
-                }
-                onSelectFile(file.path);
-              }}
+              onClick={() => onSelectFile(file.path)}
               className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-gray-700 transition-colors ${
                 activeFile === file.path
                   ? 'bg-gray-700 text-blue-400'

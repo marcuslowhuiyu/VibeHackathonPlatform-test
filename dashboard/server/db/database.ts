@@ -141,7 +141,7 @@ export interface Instance {
   notes?: string;
   // AI extension used for this instance
   // To add new extensions, update the type and validExtensions in instances.ts
-  ai_extension?: 'continue' | 'cline' | 'vibe' | 'vibe-pro';
+  ai_extension?: 'continue' | 'cline' | 'vibe' | 'loclaude-lite' | 'loclaude';
   // CloudFront fields for HTTPS access (legacy - per-instance CloudFront)
   cloudfront_distribution_id?: string;
   cloudfront_domain?: string;
@@ -153,7 +153,7 @@ export interface Instance {
   alb_access_path?: string;
 }
 
-export function createInstance(id: string, aiExtension?: 'continue' | 'cline' | 'vibe' | 'vibe-pro'): Instance {
+export function createInstance(id: string, aiExtension?: 'continue' | 'cline' | 'vibe' | 'loclaude-lite' | 'loclaude'): Instance {
   const db = loadDb();
   const instance: Instance = {
     id,

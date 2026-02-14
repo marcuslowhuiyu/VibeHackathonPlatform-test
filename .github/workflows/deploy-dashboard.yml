@@ -11,9 +11,7 @@ on:
       - 'test/**'
     paths:
       - 'dashboard/**'
-      - 'continue-instance/**'
-      - 'cline-instance/**'
-      - 'vibe-instance/**'
+      - '*-instance/**'
       - '.github/workflows/deploy-dashboard.yml'
   workflow_dispatch:
     inputs:
@@ -36,6 +34,67 @@ env:
   CONTAINER_NAME: vibe-dashboard
 
 jobs:
+  detect:
+    name: Detect Instance Changes
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.scan.outputs.matrix }}
+      has_instances: ${{ steps.scan.outputs.has_instances }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Scan for changed instances
+        id: scan
+        run: |
+          MATRIX="[]"
+
+          for dir in *-instance/; do
+            [ -f "$dir/Dockerfile" ] || continue
+
+            # Derive tag: strip trailing / and -instance suffix
+            TAG="${dir%/}"
+            TAG="${TAG%-instance}"
+
+            # Check if this instance changed
+            CHANGED=false
+            if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+              CHANGED=true
+            elif git rev-parse HEAD~1 >/dev/null 2>&1; then
+              if git diff --name-only HEAD~1 HEAD | grep -qE "^${dir}|^shared/"; then
+                CHANGED=true
+              fi
+            else
+              # No parent commit — treat all as changed
+              if git ls-files | grep -qE "^${dir}|^shared/"; then
+                CHANGED=true
+              fi
+            fi
+
+            if [ "$CHANGED" == "true" ]; then
+              EXTRA=""
+              if [ "$TAG" == "continue" ]; then
+                EXTRA=",latest"
+              fi
+
+              MATRIX=$(echo "$MATRIX" | jq -c \
+                --arg dir "${dir%/}" --arg tag "$TAG" --arg extra "$EXTRA" \
+                '. += [{"dir": $dir, "tag": $tag, "extra": $extra}]')
+            fi
+          done
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+          if [ "$MATRIX" == "[]" ]; then
+            echo "has_instances=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_instances=true" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Detected instances: $MATRIX"
+
   build:
     name: Build Images
     runs-on: ubuntu-latest
@@ -158,64 +217,69 @@ jobs:
           # Disable cache to ensure fresh builds with latest code
           no-cache: true
 
-      - name: Check if coding labs changed
-        id: changes
+
+  build-instances:
+    name: Build ${{ matrix.instance.tag }} instance
+    needs: [build, detect]
+    if: needs.detect.outputs.has_instances == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        instance: ${{ fromJson(needs.detect.outputs.matrix) }}
+      fail-fast: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repository exists
         run: |
-          # Check if Continue setup changed
-          if git diff --name-only HEAD~1 HEAD | grep -q "^continue-instance/"; then
-            echo "continue_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "continue_changed=false" >> $GITHUB_OUTPUT
-          fi
+          aws ecr describe-repositories --repository-names ${{ env.ECR_CODING_LAB }} 2>/dev/null || \
+            aws ecr create-repository --repository-name ${{ env.ECR_CODING_LAB }}
 
-          # Check if Cline setup changed
-          if git diff --name-only HEAD~1 HEAD | grep -q "^cline-instance/"; then
-            echo "cline_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "cline_changed=false" >> $GITHUB_OUTPUT
-          fi
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-          # Check if Vibe setup changed
-          if git diff --name-only HEAD~1 HEAD | grep -q "^vibe-instance/"; then
-            echo "vibe_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "vibe_changed=false" >> $GITHUB_OUTPUT
-          fi
+      - name: Compute image tags
+        id: tags
+        run: |
+          REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+          REPO="${{ env.ECR_CODING_LAB }}"
+          TAG="${{ matrix.instance.tag }}"
+          EXTRA="${{ matrix.instance.extra }}"
 
-      - name: Build and push Continue image
-        if: steps.changes.outputs.continue_changed == 'true' || github.event_name == 'workflow_dispatch'
+          TAGS="${REGISTRY}/${REPO}:${TAG}"
+
+          IFS=',' read -ra EXTRA_TAGS <<< "$EXTRA"
+          for et in "${EXTRA_TAGS[@]}"; do
+            [ -n "$et" ] && TAGS=$(printf '%s\n%s/%s:%s' "$TAGS" "$REGISTRY" "$REPO" "$et")
+          done
+
+          {
+            echo "tags<<EOF"
+            echo "$TAGS"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Build and push ${{ matrix.instance.tag }} image
         uses: docker/build-push-action@v5
         with:
-          context: ./continue-instance
+          context: .
+          file: ./${{ matrix.instance.dir }}/Dockerfile
           push: true
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:continue
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push Cline image
-        if: steps.changes.outputs.cline_changed == 'true' || github.event_name == 'workflow_dispatch'
-        uses: docker/build-push-action@v5
-        with:
-          context: ./cline-instance
-          push: true
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:cline
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push Vibe image
-        if: steps.changes.outputs.vibe_changed == 'true' || github.event_name == 'workflow_dispatch'
-        uses: docker/build-push-action@v5
-        with:
-          context: ./vibe-instance
-          push: true
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:vibe
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:vibe-pro
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.instance.tag }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.instance.tag }}
 
   deploy:
     name: Deploy to ECS

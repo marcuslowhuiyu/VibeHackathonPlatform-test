@@ -536,7 +536,16 @@ phases:
       - cd vibe-instance
       - docker build -t vibe-coding-lab:vibe .
       - docker tag vibe-coding-lab:vibe $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe
-      - docker tag vibe-coding-lab:vibe $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe-pro
+      - cd ..
+      - echo "=== Building Loclaude Lite extension from loclaude-lite-instance/ ==="
+      - cd loclaude-lite-instance
+      - docker build -t vibe-coding-lab:loclaude-lite .
+      - docker tag vibe-coding-lab:loclaude-lite $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:loclaude-lite
+      - cd ..
+      - echo "=== Building Loclaude extension from loclaude-instance/ ==="
+      - cd loclaude-instance
+      - docker build -t vibe-coding-lab:loclaude .
+      - docker tag vibe-coding-lab:loclaude $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:loclaude
       - cd ..
   post_build:
     commands:
@@ -544,7 +553,8 @@ phases:
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe
-      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe-pro
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:loclaude-lite
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:loclaude
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
       - echo Build completed
 `;
@@ -629,14 +639,15 @@ phases:
   }
 }
 
-export const AI_EXTENSIONS = ['continue', 'cline', 'vibe', 'vibe-pro'] as const;
+export const AI_EXTENSIONS = ['continue', 'cline', 'vibe', 'loclaude-lite', 'loclaude'] as const;
 export type AIExtension = typeof AI_EXTENSIONS[number];
 
 export const EXTENSION_DIRECTORIES: Record<AIExtension, string> = {
   continue: 'continue-instance',
   cline: 'cline-instance',
   vibe: 'vibe-instance',
-  'vibe-pro': 'vibe-instance',
+  'loclaude-lite': 'loclaude-lite-instance',
+  loclaude: 'loclaude-instance',
 };
 
 export async function checkSetupStatus(): Promise<{
@@ -811,9 +822,21 @@ cd ..
 cd vibe-instance
 docker build -t vibe-coding-lab:vibe .
 docker tag vibe-coding-lab:vibe ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:vibe
-docker tag vibe-coding-lab:vibe ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:vibe-pro
 docker push ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:vibe
-docker push ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:vibe-pro
+cd ..
+
+# 5. Build and push Loclaude Lite image
+cd loclaude-lite-instance
+docker build -t vibe-coding-lab:loclaude-lite .
+docker tag vibe-coding-lab:loclaude-lite ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:loclaude-lite
+docker push ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:loclaude-lite
+cd ..
+
+# 6. Build and push Loclaude image
+cd loclaude-instance
+docker build -t vibe-coding-lab:loclaude .
+docker tag vibe-coding-lab:loclaude ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:loclaude
+docker push ${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/vibe-coding-lab:loclaude
 cd ..`;
   } catch (err: any) {
     return `# Error: ${err.message}`;

@@ -17,6 +17,7 @@ dashboard/data/
 dist/
 build/
 dashboard/client/dist/
+*.tsbuildinfo
 
 # IDE and editor files
 .vscode/

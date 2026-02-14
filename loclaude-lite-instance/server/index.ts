@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs/promises';
 import { spawn } from 'child_process';
+import chokidar from 'chokidar';
 import { AgentLoop } from './agent/agent-loop.js';
 import { generateRepoMap } from './agent/repo-map.js';
 import { setupWebSocket } from './websocket.js';
@@ -209,6 +210,28 @@ async function main(): Promise<void> {
   // Create the agent loop
   const agentLoop = new AgentLoop(repoMap);
 
+  // File watcher for auto repo map refresh
+  const watcher = chokidar.watch(PROJECT_ROOT, {
+    ignored: /(node_modules|\.git|dist|\.next|\.cache)/,
+    persistent: true,
+    ignoreInitial: true,
+  });
+
+  let repoMapRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+  watcher.on('all', () => {
+    if (repoMapRefreshTimer) clearTimeout(repoMapRefreshTimer);
+    repoMapRefreshTimer = setTimeout(async () => {
+      try {
+        const newMap = await generateRepoMap(PROJECT_ROOT);
+        agentLoop.updateRepoMap(newMap);
+        console.log('Repo map refreshed');
+      } catch (err) {
+        console.warn('Failed to refresh repo map:', err);
+      }
+    }, 2000);
+  });
+
   // Verify Bedrock connectivity
   const region = process.env.AWS_REGION || '';
   let inferencePrefix = 'us';
@@ -294,6 +317,7 @@ async function main(): Promise<void> {
   // Graceful shutdown
   process.on('SIGTERM', () => {
     console.log('Received SIGTERM, shutting down...');
+    watcher.close();
     viteProcess.kill();
     server.close();
     process.exit(0);
@@ -301,7 +325,7 @@ async function main(): Promise<void> {
 
   // Start listening
   server.listen(PORT, () => {
-    console.log(`Vibe instance running on port ${PORT}`);
+    console.log(`Loclaude Lite instance running on port ${PORT}`);
   });
 }
 

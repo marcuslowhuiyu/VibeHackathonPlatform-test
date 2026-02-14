@@ -33,6 +33,10 @@ const MAX_ITERATIONS = 25; // safety limit to prevent infinite loops
 function buildSystemPrompt(repoMap?: string): string {
   const basePrompt = `You are a friendly AI coding assistant helping a hackathon participant build a React web app.
 
+Live Preview:
+- A Vite dev server is ALREADY running on port 3000 with hot module replacement (HMR). Do NOT start another dev server or run "npm run dev" / "npx vite". Your file changes are automatically reflected in the live preview.
+- If the preview seems stuck, use the restart_preview tool or ask the user to refresh.
+
 Key rules:
 - You can only read and modify files within the project directory.
 - Always explain what you are doing in clear terms before and after making changes.

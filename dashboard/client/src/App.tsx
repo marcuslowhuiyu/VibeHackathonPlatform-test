@@ -10,7 +10,7 @@ import AdminPasswordForm from './components/AdminPasswordForm'
 import OrphanedInstanceScanner from './components/OrphanedInstanceScanner'
 import AdminLoginPage from './components/auth/AdminLoginPage'
 import LandingPage from './components/LandingPage'
-import { api } from './lib/api'
+import { api, Instance } from './lib/api'
 import { useAuth } from './hooks/useAuth'
 
 type Tab = 'instances' | 'participants' | 'settings' | 'setup'
@@ -38,9 +38,9 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
   const { data: instances = [], isLoading: instancesLoading } = useQuery({
     queryKey: ['instances'],
     queryFn: api.getInstances,
-    refetchInterval: (query) => {
-      const data = query.state.data as typeof instances | undefined
-      const hasStarting = data?.some(i =>
+    refetchInterval: (query): number => {
+      const instances = query.state.data as Instance[] | undefined
+      const hasStarting = instances?.some((i: Instance) =>
         ['provisioning', 'pending'].includes(i.status.toLowerCase()) ||
         (i.status.toLowerCase() === 'running' && !i.vscode_url)
       )

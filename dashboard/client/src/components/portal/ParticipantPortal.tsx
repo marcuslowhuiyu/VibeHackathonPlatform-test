@@ -32,12 +32,12 @@ export default function ParticipantPortal({ user, onLogout }: ParticipantPortalP
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['my-instance'],
     queryFn: api.getMyInstance,
-    refetchInterval: (query) => {
-      const result = query.state.data as typeof data | undefined
-      const instance = result?.instance
-      if (!instance) return 3000 // No instance yet — poll fast
-      const isStarting = ['provisioning', 'pending'].includes(instance.status.toLowerCase()) ||
-        (instance.status.toLowerCase() === 'running' && !instance.vscode_url)
+    refetchInterval: (query): number => {
+      const result = query.state.data as { instance: { status: string; vscode_url: string | null } | null } | undefined
+      const inst = result?.instance
+      if (!inst) return 3000 // No instance yet — poll fast
+      const isStarting = ['provisioning', 'pending'].includes(inst.status.toLowerCase()) ||
+        (inst.status.toLowerCase() === 'running' && !inst.vscode_url)
       return isStarting ? 3000 : 10000
     },
   })

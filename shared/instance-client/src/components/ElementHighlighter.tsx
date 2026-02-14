@@ -11,9 +11,10 @@ interface ElementHighlighterProps {
   onElementClick: (info: ElementInfo) => void;
   refreshKey?: number;
   basePath: string;
+  onToggleInspector?: () => void;
 }
 
-export default function ElementHighlighter({ previewUrl, onElementClick, refreshKey, basePath }: ElementHighlighterProps) {
+export default function ElementHighlighter({ previewUrl, onElementClick, refreshKey, basePath, onToggleInspector }: ElementHighlighterProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Reload the iframe when refreshKey changes (file was modified by agent)
@@ -66,7 +67,15 @@ export default function ElementHighlighter({ previewUrl, onElementClick, refresh
     <div className="h-full flex flex-col bg-gray-900">
       <div className="h-10 shrink-0 bg-gray-800 border-b border-gray-700 flex items-center px-3 gap-3">
         <span className="text-xs text-blue-400 font-medium">Element Inspector</span>
-        <span className="text-xs text-gray-500">Alt+Click to select an element</span>
+        <span className="text-xs text-gray-500 flex-1">Alt+Click to select an element</span>
+        {onToggleInspector && (
+          <button
+            onClick={onToggleInspector}
+            className="px-2 py-1 text-xs font-medium text-gray-400 bg-gray-700 rounded hover:bg-gray-600 hover:text-gray-200 transition-colors"
+          >
+            Disable
+          </button>
+        )}
       </div>
       <div className="flex-1 overflow-hidden">
         <iframe

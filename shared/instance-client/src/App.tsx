@@ -17,6 +17,7 @@ export default function App() {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [previewRefreshKey, setPreviewRefreshKey] = useState(0);
+  const [inspectorEnabled, setInspectorEnabled] = useState(true);
 
   // Fetch project files
   const fetchFiles = useCallback(() => {
@@ -56,6 +57,37 @@ export default function App() {
     setActiveFile(path);
   }, []);
 
+  const previewPanel = inspectorEnabled ? (
+    <ElementHighlighter
+      previewUrl={previewUrl}
+      onElementClick={sendElementClick}
+      refreshKey={previewRefreshKey}
+      basePath={basePath}
+      onToggleInspector={() => setInspectorEnabled(false)}
+    />
+  ) : (
+    <div className="h-full flex flex-col bg-gray-900">
+      <div className="h-10 shrink-0 bg-gray-800 border-b border-gray-700 flex items-center px-3 gap-3">
+        <button
+          onClick={() => setInspectorEnabled(true)}
+          className="px-2 py-1 text-xs font-medium text-gray-400 bg-gray-700 rounded hover:bg-gray-600 hover:text-blue-400 transition-colors"
+        >
+          Enable Inspector
+        </button>
+        <span className="text-xs text-gray-500">Preview Only</span>
+      </div>
+      <div className="flex-1 overflow-hidden">
+        <iframe
+          key={previewRefreshKey}
+          src={previewUrl}
+          className="w-full h-full bg-white border-none"
+          title="Live Preview"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        />
+      </div>
+    </div>
+  );
+
   return (
     <LayoutManager
       chatPanel={
@@ -66,14 +98,7 @@ export default function App() {
           isThinking={isThinking}
         />
       }
-      previewPanel={
-        <ElementHighlighter
-          previewUrl={previewUrl}
-          onElementClick={sendElementClick}
-          refreshKey={previewRefreshKey}
-          basePath={basePath}
-        />
-      }
+      previewPanel={previewPanel}
       codePanel={
         <CodeViewer
           files={files.filter(f => f.type === 'file')}

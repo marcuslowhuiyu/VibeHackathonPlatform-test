@@ -7,17 +7,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
-COPY package.json tsconfig.json ./
+COPY loclaude-instance/package.json loclaude-instance/tsconfig.json ./
 RUN npm install
 
-COPY client/ ./client/
+# Copy and build shared client
+COPY shared/instance-client/ ./client/
 RUN cd client && npm install && npm run build
 
-COPY server/ ./server/
+COPY loclaude-instance/server/ ./server/
 
 RUN mkdir -p /home/workspace/project
 
-COPY entrypoint.sh /app/entrypoint.sh
+COPY loclaude-instance/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 8080 3000

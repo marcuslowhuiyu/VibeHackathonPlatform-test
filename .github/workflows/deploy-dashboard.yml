@@ -63,12 +63,12 @@ jobs:
             if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
               CHANGED=true
             elif git rev-parse HEAD~1 >/dev/null 2>&1; then
-              if git diff --name-only HEAD~1 HEAD | grep -q "^${dir}"; then
+              if git diff --name-only HEAD~1 HEAD | grep -qE "^${dir}|^shared/"; then
                 CHANGED=true
               fi
             else
               # No parent commit — treat all as changed
-              if git ls-files | grep -q "^${dir}"; then
+              if git ls-files | grep -qE "^${dir}|^shared/"; then
                 CHANGED=true
               fi
             fi
@@ -274,7 +274,8 @@ jobs:
       - name: Build and push ${{ matrix.instance.tag }} image
         uses: docker/build-push-action@v5
         with:
-          context: ./${{ matrix.instance.dir }}
+          context: .
+          file: ./${{ matrix.instance.dir }}/Dockerfile
           push: true
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.instance.tag }}

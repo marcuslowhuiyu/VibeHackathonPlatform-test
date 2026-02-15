@@ -349,6 +349,26 @@ jobs:
             echo "needs_tg_setup=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Ensure CI user has CloudFront permissions
+        continue-on-error: true
+        run: |
+          # Get the current IAM user name
+          CI_USER=$(aws sts get-caller-identity --query 'Arn' --output text | grep -oP '(?<=user/).*')
+          echo "CI user: $CI_USER"
+          aws iam put-user-policy --user-name "$CI_USER" --policy-name cloudfront-invalidation --policy-document '{
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": [
+                "cloudfront:CreateInvalidation",
+                "cloudfront:GetInvalidation",
+                "cloudfront:ListInvalidations"
+              ],
+              "Resource": "*"
+            }]
+          }'
+          echo "CloudFront invalidation permissions added to $CI_USER"
+
       - name: Ensure ecsTaskRole has dashboard permissions
         run: |
           # Ensure ecsTaskRole exists

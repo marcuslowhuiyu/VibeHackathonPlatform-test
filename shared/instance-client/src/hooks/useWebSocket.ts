@@ -167,6 +167,9 @@ export function useWebSocket(): {
 
   const sendMessage = useCallback((text: string) => {
     setMessages((prev) => [...prev, { role: 'user', content: text }]);
+    // Show thinking indicator immediately (don't wait for server's first event)
+    setIsThinking(true);
+    setThinkingText('');
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'chat', message: text }));
     }

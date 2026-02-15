@@ -40,12 +40,16 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
     // Per-connection conversation history kept in memory
     const conversationHistory: Array<{ role: string; content: string }> = [];
 
+    // Auto-fix state: prevent infinite error-fix loops
+    let autoFixAttempts = 0;
+    let lastErrorTime = 0;
+
     // ------------------------------------------------------------------
     // Wire agent events → WebSocket messages
     // ------------------------------------------------------------------
 
-    const onThinking = () => {
-      send(ws, { type: 'agent:thinking' });
+    const onThinking = (data?: { text?: string }) => {
+      send(ws, { type: 'agent:thinking', text: data?.text });
     };
 
     const onText = (data: { text: string }) => {
@@ -93,6 +97,7 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
       // ---- chat message ------------------------------------------------
       if (parsed.type === 'chat' && typeof parsed.message === 'string') {
         const userMessage = parsed.message;
+        autoFixAttempts = 0;
 
         // Track in per-connection history
         conversationHistory.push({ role: 'user', content: userMessage });
@@ -117,6 +122,27 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
       ) {
         const formattedMessage = `Change the ${parsed.tagName} element that says '${parsed.textContent}'...`;
         send(ws, { type: 'prefill', message: formattedMessage });
+        return;
+      }
+
+      // ---- preview_error (auto-fix) -------------------------------------
+      if (parsed.type === 'preview_error' && typeof parsed.error === 'string') {
+        const now = Date.now();
+        if (now - lastErrorTime < 5000) return;
+        if (autoFixAttempts >= 3) return;
+        lastErrorTime = now;
+        autoFixAttempts++;
+
+        const errorMessage = `The live preview has an error:\n\`\`\`\n${parsed.error}\n\`\`\`\nPlease investigate and fix this error.`;
+        send(ws, { type: 'agent:text', content: `[Auto-detected error] ${parsed.error}\n\nAttempting to fix...` });
+
+        try {
+          await agentLoop.processMessage(errorMessage);
+          send(ws, { type: 'agent:done' });
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          send(ws, { type: 'error', message: errMsg });
+        }
         return;
       }
     });

@@ -163,35 +163,93 @@ export class AgentLoop extends EventEmitter {
   }
 
   // -------------------------------------------------------------------------
+  // Thinking history helpers
+  // -------------------------------------------------------------------------
+
+  /**
+   * Return a copy of the conversation history with all reasoningContent blocks
+   * removed from assistant messages. Used as a fallback when the API rejects
+   * thinking blocks in the history (e.g. missing signatures, redacted content
+   * format mismatch).
+   */
+  private stripThinkingFromHistory(): Message[] {
+    return this.conversationHistory.map((msg) => {
+      if (msg.role !== "assistant" || !msg.content) return msg;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const filtered = (msg.content as ContentBlock[]).filter(
+        (block) => (block as any)?.reasoningContent === undefined,
+      );
+      // If all blocks were thinking (unlikely), keep at least a minimal text block
+      if (filtered.length === 0) {
+        return { ...msg, content: [{ text: "(thinking)" }] };
+      }
+      return { ...msg, content: filtered };
+    });
+  }
+
+  // -------------------------------------------------------------------------
   // Core agent loop
   // -------------------------------------------------------------------------
 
   private async runLoop(): Promise<void> {
+    let thinkingDisabled = false; // Fallback flag if thinking blocks cause API errors
+
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       const systemPrompt = buildSystemPrompt(this.repoMap);
 
-      // Build the ConverseStream command with extended thinking enabled.
-      // max_tokens must be greater than thinking.budget_tokens.
+      // Build the ConverseStream command.
+      // Extended thinking is enabled by default but may be disabled as a fallback
+      // if the conversation history triggers validation errors.
       const command = new ConverseStreamCommand({
         modelId: MODEL_ID,
         system: [{ text: systemPrompt }] as SystemContentBlock[],
-        messages: this.conversationHistory,
+        messages: thinkingDisabled
+          ? this.stripThinkingFromHistory()
+          : this.conversationHistory,
         inferenceConfig: {
           maxTokens: 16384,
         },
         toolConfig: {
           tools: bedrockTools(),
         },
-        additionalModelRequestFields: {
-          thinking: {
-            type: "enabled",
-            budget_tokens: 8192,
-          },
-        },
+        ...(thinkingDisabled
+          ? {}
+          : {
+              additionalModelRequestFields: {
+                thinking: {
+                  type: "enabled",
+                  budget_tokens: 8192,
+                },
+              },
+            }),
       });
 
-      // Collect the streamed response
-      const response = await this.client.send(command);
+      // Collect the streamed response — if thinking history causes a validation
+      // error, strip thinking blocks and retry without thinking for this iteration.
+      let response;
+      try {
+        response = await this.client.send(command);
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (!thinkingDisabled && errMsg.includes("thinking")) {
+          // Thinking history is corrupted — retry without thinking
+          thinkingDisabled = true;
+          const fallbackCommand = new ConverseStreamCommand({
+            modelId: MODEL_ID,
+            system: [{ text: systemPrompt }] as SystemContentBlock[],
+            messages: this.stripThinkingFromHistory(),
+            inferenceConfig: {
+              maxTokens: 16384,
+            },
+            toolConfig: {
+              tools: bedrockTools(),
+            },
+          });
+          response = await this.client.send(fallbackCommand);
+        } else {
+          throw err;
+        }
+      }
 
       const assistantContent: ContentBlock[] = [];
       let stopReason: string | undefined;
@@ -201,6 +259,7 @@ export class AgentLoop extends EventEmitter {
         let currentText = "";
         let currentThinking = "";
         let currentThinkingSignature = "";
+        let currentRedactedChunks: Uint8Array[] = [];
         let currentBlockType: "thinking" | "text" | "toolUse" = "text";
         let currentToolUseId: string | undefined;
         let currentToolName: string | undefined;
@@ -221,10 +280,10 @@ export class AgentLoop extends EventEmitter {
             }
           }
 
-          // -- Reasoning/thinking delta (text chunks + signature) --
+          // -- Reasoning/thinking delta (text chunks, signature, or redacted content) --
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const reasoningDelta = (event.contentBlockDelta?.delta as any)?.reasoningContent as
-            | { text?: string; signature?: string }
+            | { text?: string; signature?: string; redactedContent?: Uint8Array }
             | undefined;
           if (reasoningDelta) {
             currentBlockType = "thinking";
@@ -234,6 +293,9 @@ export class AgentLoop extends EventEmitter {
             }
             if (reasoningDelta.signature) {
               currentThinkingSignature = reasoningDelta.signature;
+            }
+            if (reasoningDelta.redactedContent) {
+              currentRedactedChunks.push(reasoningDelta.redactedContent);
             }
           }
 
@@ -273,18 +335,36 @@ export class AgentLoop extends EventEmitter {
               currentToolUseId = undefined;
               currentToolName = undefined;
               currentToolInputJson = "";
-            } else if (currentBlockType === "thinking" && currentThinking) {
-              // Finalize thinking/reasoning block with signature for conversation history
-              assistantContent.push({
-                reasoningContent: {
-                  reasoningText: {
-                    text: currentThinking,
-                    signature: currentThinkingSignature || undefined,
+            } else if (currentBlockType === "thinking") {
+              if (currentThinking) {
+                // Finalize thinking/reasoning block with text + signature
+                assistantContent.push({
+                  reasoningContent: {
+                    reasoningText: {
+                      text: currentThinking,
+                      signature: currentThinkingSignature || undefined,
+                    },
                   },
-                },
-              } as ContentBlock);
+                } as ContentBlock);
+              } else if (currentRedactedChunks.length > 0) {
+                // Finalize redacted thinking block (encrypted content from the model)
+                const totalLength = currentRedactedChunks.reduce((sum, c) => sum + c.length, 0);
+                const merged = new Uint8Array(totalLength);
+                let off = 0;
+                for (const chunk of currentRedactedChunks) {
+                  merged.set(chunk, off);
+                  off += chunk.length;
+                }
+                assistantContent.push({
+                  reasoningContent: {
+                    redactedContent: merged,
+                  },
+                } as ContentBlock);
+              }
+              // Reset thinking state
               currentThinking = "";
               currentThinkingSignature = "";
+              currentRedactedChunks = [];
             } else if (currentText) {
               // Finalize text block
               assistantContent.push({ text: currentText });
@@ -296,6 +376,36 @@ export class AgentLoop extends EventEmitter {
           // -- Message stop --
           if (event.messageStop) {
             stopReason = event.messageStop.stopReason;
+          }
+        }
+      }
+
+      // Safety net: when thinking is enabled, ensure assistant content starts
+      // with reasoningContent (required by the API). If the model somehow
+      // didn't produce a thinking block, or the stream delivered blocks in
+      // an unexpected order, fix it here.
+      if (!thinkingDisabled && assistantContent.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const firstHasReasoning = (assistantContent[0] as any)?.reasoningContent !== undefined;
+        if (!firstHasReasoning) {
+          // Try to find a reasoningContent block elsewhere and move it to front
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const reasoningIdx = assistantContent.findIndex(
+            (b) => (b as any)?.reasoningContent !== undefined,
+          );
+          if (reasoningIdx > 0) {
+            const [reasoningBlock] = assistantContent.splice(reasoningIdx, 1);
+            assistantContent.unshift(reasoningBlock);
+          } else {
+            // No thinking block at all — insert a minimal placeholder.
+            // The signature field is optional per the SDK types.
+            assistantContent.unshift({
+              reasoningContent: {
+                reasoningText: {
+                  text: "Continuing with the task.",
+                },
+              },
+            } as ContentBlock);
           }
         }
       }

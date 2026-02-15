@@ -18,6 +18,7 @@ interface ChatPanelProps {
   prefillMessage: string;
   onSendMessage: (msg: string) => void;
   isThinking: boolean;
+  thinkingText: string;
 }
 
 function ToolCallCard({ tool }: { tool: ToolCall }) {
@@ -82,8 +83,9 @@ function ToolCallCard({ tool }: { tool: ToolCall }) {
   );
 }
 
-function ThinkingDots() {
+function ThinkingIndicator({ text }: { text: string }) {
   const [dots, setDots] = useState('');
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -92,19 +94,36 @@ function ThinkingDots() {
     return () => clearInterval(interval);
   }, []);
 
+  // Auto-scroll the thinking text
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [text]);
+
   return (
-    <div className="flex items-start gap-3 px-4 py-3">
-      <div className="w-7 h-7 rounded-full bg-purple-600 shrink-0 flex items-center justify-center">
-        <span className="text-xs font-bold text-white">A</span>
-      </div>
-      <div className="text-gray-400 text-sm pt-1">
-        Thinking<span className="inline-block w-6 text-left">{dots}</span>
+    <div className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <div className="w-7 h-7 rounded-full bg-purple-600 shrink-0 flex items-center justify-center">
+          <span className="text-xs font-bold text-white">A</span>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-gray-400 text-sm">
+            Thinking<span className="inline-block w-6 text-left">{dots}</span>
+          </div>
+          {text && (
+            <div
+              ref={scrollRef}
+              className="mt-2 text-xs text-gray-500 italic whitespace-pre-wrap break-words max-h-32 overflow-y-auto bg-gray-800/50 rounded p-2 border border-gray-800"
+            >
+              {text}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-export default function ChatPanel({ messages, prefillMessage, onSendMessage, isThinking }: ChatPanelProps) {
+export default function ChatPanel({ messages, prefillMessage, onSendMessage, isThinking, thinkingText }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -112,7 +131,7 @@ export default function ChatPanel({ messages, prefillMessage, onSendMessage, isT
   // Auto-scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isThinking]);
+  }, [messages, isThinking, thinkingText]);
 
   // Prefill message
   useEffect(() => {
@@ -166,7 +185,7 @@ export default function ChatPanel({ messages, prefillMessage, onSendMessage, isT
             </div>
           </div>
         ))}
-        {isThinking && <ThinkingDots />}
+        {isThinking && <ThinkingIndicator text={thinkingText} />}
         <div ref={messagesEndRef} />
       </div>
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import LayoutManager from './components/LayoutManager';
 import ChatPanel from './components/ChatPanel';
@@ -11,7 +11,7 @@ interface FileEntry {
 }
 
 export default function App() {
-  const { messages, isThinking, prefillMessage, currentFileChange, sendMessage, sendElementClick, basePath } =
+  const { messages, isThinking, thinkingText, prefillMessage, currentFileChange, sendMessage, sendElementClick, sendPreviewError, basePath } =
     useWebSocket();
 
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -40,6 +40,17 @@ export default function App() {
     fetchFiles();
   }, [fetchFiles]);
 
+  // Listen for preview errors from the iframe
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'preview_error') {
+        sendPreviewError(event.data.error || 'Unknown error');
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [sendPreviewError]);
+
   // When a file changes, re-fetch the file tree and refresh the preview
   useEffect(() => {
     if (currentFileChange) {
@@ -56,6 +67,24 @@ export default function App() {
   const handleSelectFile = useCallback((path: string) => {
     setActiveFile(path);
   }, []);
+
+  // Inject error-capture.js into the plain preview iframe (when inspector is disabled)
+  const plainIframeRef = useRef<HTMLIFrameElement>(null);
+  const handlePlainIframeLoad = useCallback(async () => {
+    const iframe = plainIframeRef.current;
+    if (!iframe) return;
+    try {
+      const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (!iframeDoc) return;
+      const response = await fetch(`${basePath}/error-capture.js`);
+      const scriptText = await response.text();
+      const script = iframeDoc.createElement('script');
+      script.textContent = scriptText;
+      iframeDoc.body.appendChild(script);
+    } catch {
+      // Cross-origin or fetch error
+    }
+  }, [basePath]);
 
   const previewPanel = inspectorEnabled ? (
     <ElementHighlighter
@@ -78,8 +107,10 @@ export default function App() {
       </div>
       <div className="flex-1 overflow-hidden">
         <iframe
+          ref={plainIframeRef}
           key={previewRefreshKey}
           src={previewUrl}
+          onLoad={handlePlainIframeLoad}
           className="w-full h-full bg-white border-none"
           title="Live Preview"
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
@@ -96,6 +127,7 @@ export default function App() {
           prefillMessage={prefillMessage}
           onSendMessage={sendMessage}
           isThinking={isThinking}
+          thinkingText={thinkingText}
         />
       }
       previewPanel={previewPanel}

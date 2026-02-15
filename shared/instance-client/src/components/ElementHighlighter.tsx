@@ -49,11 +49,16 @@ export default function ElementHighlighter({ previewUrl, onElementClick, refresh
       const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
       if (!iframeDoc) return;
 
-      // Fetch the highlighter inject script
+      // Inject error capture script first
+      const errorResponse = await fetch(`${basePath}/error-capture.js`);
+      const errorScriptText = await errorResponse.text();
+      const errorScript = iframeDoc.createElement('script');
+      errorScript.textContent = errorScriptText;
+      iframeDoc.body.appendChild(errorScript);
+
+      // Fetch and inject the highlighter script
       const response = await fetch(`${basePath}/highlighter-inject.js`);
       const scriptText = await response.text();
-
-      // Create and inject script element
       const script = iframeDoc.createElement('script');
       script.textContent = scriptText;
       iframeDoc.body.appendChild(script);

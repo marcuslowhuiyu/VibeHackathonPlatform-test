@@ -876,18 +876,11 @@ jobs:
             echo "Current origin: $CURRENT_ORIGIN, Expected: $ALB_DNS"
             if [ -n "$CURRENT_ORIGIN" ] && [ "$CURRENT_ORIGIN" != "$ALB_DNS" ]; then
               echo "Origin mismatch! Updating CloudFront origin to $ALB_DNS..."
-              # Get the current config and ETag
+              # Get the current config and ETag, update origin
               CF_CONFIG_FILE=$(mktemp)
               aws cloudfront get-distribution-config --id "$CF_ID" --output json > "$CF_CONFIG_FILE" 2>/dev/null
-              CF_ETAG=$(cat "$CF_CONFIG_FILE" | python3 -c "import sys,json; print(json.load(sys.stdin)['ETag'])")
-              # Update the origin domain in the config
-              cat "$CF_CONFIG_FILE" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-config = data['DistributionConfig']
-config['Origins']['Items'][0]['DomainName'] = '$ALB_DNS'
-json.dump(config, sys.stdout)
-" > "${CF_CONFIG_FILE}.updated"
+              CF_ETAG=$(jq -r '.ETag' "$CF_CONFIG_FILE")
+              jq --arg dns "$ALB_DNS" '.DistributionConfig.Origins.Items[0].DomainName = $dns | .DistributionConfig' "$CF_CONFIG_FILE" > "${CF_CONFIG_FILE}.updated"
               aws cloudfront update-distribution --id "$CF_ID" --if-match "$CF_ETAG" \
                 --distribution-config "file://${CF_CONFIG_FILE}.updated" \
                 --query 'Distribution.DomainName' --output text 2>&1 && \

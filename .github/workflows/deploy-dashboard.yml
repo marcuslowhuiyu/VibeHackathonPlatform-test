@@ -1073,6 +1073,7 @@ jobs:
 
       - name: Invalidate CloudFront cache
         if: steps.cloudfront.outputs.cloudfront_id != ''
+        continue-on-error: true
         run: |
           CF_ID="${{ steps.cloudfront.outputs.cloudfront_id }}"
           echo "Invalidating CloudFront cache for distribution: $CF_ID"

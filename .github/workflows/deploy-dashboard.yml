@@ -739,31 +739,48 @@ jobs:
                 echo "Target group correctly associated with our ALB"
               else
                 echo "WARNING: Target group is associated with wrong ALB ($CURRENT_TG_ALB instead of $ALB_ARN)"
-                echo "A target group can only be associated with one ALB. Removing reference from wrong ALB..."
+                echo "A target group can only be associated with one ALB. Removing all references from wrong ALB..."
 
-                # Find and delete the listener on the wrong ALB that references our TG
+                # Find and remove ALL references on the wrong ALB (listeners AND rules)
                 WRONG_LISTENERS=$(aws elbv2 describe-listeners --load-balancer-arn "$CURRENT_TG_ALB" --query 'Listeners[*].ListenerArn' --output text 2>/dev/null || echo "")
                 echo "Listeners on wrong ALB: $WRONG_LISTENERS"
                 for LIS in $WRONG_LISTENERS; do
+                  # Check default action
                   LIS_TG=$(aws elbv2 describe-listeners --listener-arns "$LIS" --query 'Listeners[0].DefaultActions[0].TargetGroupArn' --output text 2>/dev/null || echo "")
-                  echo "  Listener $LIS -> TG $LIS_TG"
+                  echo "  Listener $LIS default -> $LIS_TG"
                   if [ "$LIS_TG" == "$TG_ARN" ]; then
-                    echo "  Deleting listener that references our TG on wrong ALB..."
-                    aws elbv2 delete-listener --listener-arn "$LIS" || echo "  WARNING: Failed to delete listener"
+                    echo "  Deleting listener (default action references our TG)..."
+                    aws elbv2 delete-listener --listener-arn "$LIS" 2>&1 || true
                   fi
+
+                  # Check listener rules for forward actions to our TG
+                  RULES=$(aws elbv2 describe-rules --listener-arn "$LIS" --query 'Rules[*].RuleArn' --output text 2>/dev/null || echo "")
+                  for RULE in $RULES; do
+                    RULE_TG=$(aws elbv2 describe-rules --rule-arns "$RULE" --query 'Rules[0].Actions[0].TargetGroupArn' --output text 2>/dev/null || echo "")
+                    if [ "$RULE_TG" == "$TG_ARN" ]; then
+                      echo "  Rule $RULE references our TG - deleting..."
+                      aws elbv2 delete-rule --rule-arn "$RULE" 2>&1 || true
+                    fi
+                  done
                 done
 
-                # Wait for TG disassociation
-                echo "Waiting for target group to disassociate from wrong ALB..."
-                for i in {1..12}; do
-                  CURRENT_ARNS=$(aws elbv2 describe-target-groups --target-group-arns "$TG_ARN" --query 'TargetGroups[0].LoadBalancerArns' --output text 2>/dev/null || echo "None")
-                  echo "  TG ALB associations: $CURRENT_ARNS ($i/12)"
-                  if [ "$CURRENT_ARNS" == "None" ] || [ -z "$CURRENT_ARNS" ]; then
-                    echo "  Target group is now free"
-                    break
-                  fi
-                  sleep 5
-                done
+                # Deregister any lingering targets
+                TARGETS=$(aws elbv2 describe-target-health --target-group-arn "$TG_ARN" --query 'TargetHealthDescriptions[*].Target' --output json 2>/dev/null || echo "[]")
+                if [ "$TARGETS" != "[]" ] && [ -n "$TARGETS" ]; then
+                  echo "Deregistering targets: $TARGETS"
+                  aws elbv2 deregister-targets --target-group-arn "$TG_ARN" --targets "$TARGETS" 2>/dev/null || true
+                fi
+
+                # Try to delete the old TG and recreate
+                echo "Attempting to delete target group to recreate on correct ALB..."
+                if aws elbv2 delete-target-group --target-group-arn "$TG_ARN" 2>&1; then
+                  echo "Target group deleted successfully"
+                  CREATE_TG=true
+                else
+                  echo "Could not delete target group. Creating with alternate name..."
+                  TG_NAME="${TG_NAME}-v2"
+                  CREATE_TG=true
+                fi
               fi
             else
               echo "Reusing existing target group (no ALB association): $TG_ARN"

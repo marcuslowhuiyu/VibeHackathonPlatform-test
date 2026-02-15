@@ -738,9 +738,32 @@ jobs:
               if [ "$CURRENT_TG_ALB" == "$ALB_ARN" ]; then
                 echo "Target group correctly associated with our ALB"
               else
-                echo "NOTE: Target group is currently associated with ALB $CURRENT_TG_ALB"
-                echo "Will add our ALB ($ALB_ARN) listener to point to this target group"
-                echo "The target group can be referenced by multiple ALBs — no need to recreate"
+                echo "WARNING: Target group is associated with wrong ALB ($CURRENT_TG_ALB instead of $ALB_ARN)"
+                echo "A target group can only be associated with one ALB. Removing reference from wrong ALB..."
+
+                # Find and delete the listener on the wrong ALB that references our TG
+                WRONG_LISTENERS=$(aws elbv2 describe-listeners --load-balancer-arn "$CURRENT_TG_ALB" --query 'Listeners[*].ListenerArn' --output text 2>/dev/null || echo "")
+                echo "Listeners on wrong ALB: $WRONG_LISTENERS"
+                for LIS in $WRONG_LISTENERS; do
+                  LIS_TG=$(aws elbv2 describe-listeners --listener-arns "$LIS" --query 'Listeners[0].DefaultActions[0].TargetGroupArn' --output text 2>/dev/null || echo "")
+                  echo "  Listener $LIS -> TG $LIS_TG"
+                  if [ "$LIS_TG" == "$TG_ARN" ]; then
+                    echo "  Deleting listener that references our TG on wrong ALB..."
+                    aws elbv2 delete-listener --listener-arn "$LIS" || echo "  WARNING: Failed to delete listener"
+                  fi
+                done
+
+                # Wait for TG disassociation
+                echo "Waiting for target group to disassociate from wrong ALB..."
+                for i in {1..12}; do
+                  CURRENT_ARNS=$(aws elbv2 describe-target-groups --target-group-arns "$TG_ARN" --query 'TargetGroups[0].LoadBalancerArns' --output text 2>/dev/null || echo "None")
+                  echo "  TG ALB associations: $CURRENT_ARNS ($i/12)"
+                  if [ "$CURRENT_ARNS" == "None" ] || [ -z "$CURRENT_ARNS" ]; then
+                    echo "  Target group is now free"
+                    break
+                  fi
+                  sleep 5
+                done
               fi
             else
               echo "Reusing existing target group (no ALB association): $TG_ARN"

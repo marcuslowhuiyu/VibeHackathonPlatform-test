@@ -743,12 +743,33 @@ jobs:
                 # Must first stop the ECS service so it releases the target group
                 ECS_SVC_NAME="${{ needs.build.outputs.ecs_service }}"
                 aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SVC_NAME --desired-count 0 2>/dev/null || true
-                sleep 5
                 aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SVC_NAME --force 2>/dev/null || true
-                # Wait for target group to be free
-                for i in {1..12}; do
-                  aws elbv2 delete-target-group --target-group-arn $TG_ARN 2>/dev/null && break
-                  echo "Waiting for target group to be released... ($i/12)"
+
+                # Wait for the service to fully reach INACTIVE
+                echo "Waiting for ECS service to reach INACTIVE..."
+                for i in {1..30}; do
+                  SVC_STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SVC_NAME --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+                  echo "Service status: $SVC_STATUS ($i/30)"
+                  if [ "$SVC_STATUS" == "INACTIVE" ] || [ "$SVC_STATUS" == "MISSING" ] || [ "$SVC_STATUS" == "None" ]; then
+                    break
+                  fi
+                  sleep 10
+                done
+
+                # Also remove the TG from any listener on the wrong ALB
+                WRONG_LISTENER=$(aws elbv2 describe-listeners --load-balancer-arn $CURRENT_TG_ALB --query 'Listeners[*].ListenerArn' --output text 2>/dev/null || echo "")
+                for LIS in $WRONG_LISTENER; do
+                  LIS_TG=$(aws elbv2 describe-listeners --listener-arns $LIS --query 'Listeners[0].DefaultActions[0].TargetGroupArn' --output text 2>/dev/null || echo "")
+                  if [ "$LIS_TG" == "$TG_ARN" ]; then
+                    echo "Removing listener $LIS that points to our target group on wrong ALB"
+                    aws elbv2 delete-listener --listener-arn $LIS 2>/dev/null || true
+                  fi
+                done
+
+                # Now delete the target group
+                for i in {1..6}; do
+                  aws elbv2 delete-target-group --target-group-arn $TG_ARN 2>/dev/null && { echo "Target group deleted"; break; }
+                  echo "Waiting for target group to be released... ($i/6)"
                   sleep 10
                 done
                 CREATE_TG=true

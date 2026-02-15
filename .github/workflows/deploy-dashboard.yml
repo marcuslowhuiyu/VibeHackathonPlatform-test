@@ -12,6 +12,7 @@ on:
     paths:
       - 'dashboard/**'
       - '*-instance/**'
+      - 'shared/**'
       - '.github/workflows/deploy-dashboard.yml'
   workflow_dispatch:
     inputs:

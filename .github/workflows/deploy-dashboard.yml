@@ -178,8 +178,8 @@ jobs:
             echo "ecs_service=vibe-dashboard-staging" >> $GITHUB_OUTPUT
             echo "task_family=vibe-dashboard-staging" >> $GITHUB_OUTPUT
             echo "tg_name=vibe-dashboard-staging-tg" >> $GITHUB_OUTPUT
-            echo "task_cpu=256" >> $GITHUB_OUTPUT
-            echo "task_memory=512" >> $GITHUB_OUTPUT
+            echo "task_cpu=512" >> $GITHUB_OUTPUT
+            echo "task_memory=1024" >> $GITHUB_OUTPUT
           else
             # Feature branch - minimal resources
             echo "ecs_service=vibe-test-$BRANCH_SLUG" >> $GITHUB_OUTPUT

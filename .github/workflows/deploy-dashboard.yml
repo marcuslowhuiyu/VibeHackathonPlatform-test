@@ -725,23 +725,54 @@ jobs:
           ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].DNSName' --output text)
           echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
 
-          # Check if target group exists - REUSE if it does, only create if missing
+          # Check if target group exists
           TG_ARN=$(aws elbv2 describe-target-groups --names $TG_NAME --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
 
+          CREATE_TG=false
           if [ "$TG_ARN" != "None" ] && [ -n "$TG_ARN" ]; then
-            echo "Reusing existing target group: $TG_ARN"
+            # Target group exists — check if it's on the correct ALB
+            TG_ALB_ARNS=$(aws elbv2 describe-target-groups --target-group-arns $TG_ARN --query 'TargetGroups[0].LoadBalancerArns' --output text 2>/dev/null || echo "")
+
+            if [ -n "$TG_ALB_ARNS" ] && [ "$TG_ALB_ARNS" != "None" ]; then
+              CURRENT_TG_ALB=$(echo $TG_ALB_ARNS | awk '{print $1}')
+              if [ "$CURRENT_TG_ALB" == "$ALB_ARN" ]; then
+                echo "Target group correctly associated with our ALB"
+              else
+                echo "WARNING: Target group is on wrong ALB ($CURRENT_TG_ALB instead of $ALB_ARN)"
+                echo "Deleting target group to recreate on correct ALB..."
+                # Must first stop the ECS service so it releases the target group
+                ECS_SVC_NAME="${{ needs.build.outputs.ecs_service }}"
+                aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SVC_NAME --desired-count 0 2>/dev/null || true
+                sleep 5
+                aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SVC_NAME --force 2>/dev/null || true
+                # Wait for target group to be free
+                for i in {1..12}; do
+                  aws elbv2 delete-target-group --target-group-arn $TG_ARN 2>/dev/null && break
+                  echo "Waiting for target group to be released... ($i/12)"
+                  sleep 10
+                done
+                CREATE_TG=true
+              fi
+            else
+              echo "Reusing existing target group (no ALB association): $TG_ARN"
+            fi
 
             # Update health check settings on existing target group
-            echo "Updating target group health check settings..."
-            aws elbv2 modify-target-group \
-              --target-group-arn $TG_ARN \
-              --health-check-path /api/health \
-              --health-check-interval-seconds 30 \
-              --health-check-timeout-seconds 10 \
-              --healthy-threshold-count 2 \
-              --unhealthy-threshold-count 3 || true
+            if [ "$CREATE_TG" == "false" ]; then
+              echo "Updating target group health check settings..."
+              aws elbv2 modify-target-group \
+                --target-group-arn $TG_ARN \
+                --health-check-path /api/health \
+                --health-check-interval-seconds 30 \
+                --health-check-timeout-seconds 10 \
+                --healthy-threshold-count 2 \
+                --unhealthy-threshold-count 3 || true
+            fi
           else
-            # Create new target group only if it doesn't exist
+            CREATE_TG=true
+          fi
+
+          if [ "$CREATE_TG" == "true" ]; then
             echo "Creating target group: $TG_NAME"
             TG_ARN=$(aws elbv2 create-target-group \
               --name $TG_NAME \
@@ -755,28 +786,6 @@ jobs:
               --query 'TargetGroups[0].TargetGroupArn' --output text)
           fi
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
-
-          # Check which ALB the target group is currently associated with (if any)
-          TG_ALB_ARNS=$(aws elbv2 describe-target-groups --target-group-arns $TG_ARN --query 'TargetGroups[0].LoadBalancerArns' --output text 2>/dev/null || echo "")
-
-          if [ -n "$TG_ALB_ARNS" ] && [ "$TG_ALB_ARNS" != "None" ]; then
-            # Target group is already associated with an ALB
-            CURRENT_TG_ALB=$(echo $TG_ALB_ARNS | awk '{print $1}')
-            echo "Target group is already associated with ALB: $CURRENT_TG_ALB"
-
-            if [ "$CURRENT_TG_ALB" == "$ALB_ARN" ]; then
-              echo "Target group is correctly associated with our ALB"
-            else
-              # Target group is associated with a different ALB - use that one instead
-              echo "Using existing ALB that target group is associated with"
-              ALB_ARN=$CURRENT_TG_ALB
-              ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].DNSName' --output text)
-              ALB_NAME=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].LoadBalancerName' --output text)
-              echo "alb_arn=$ALB_ARN" >> $GITHUB_OUTPUT
-              echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
-              echo "alb_name=$ALB_NAME" >> $GITHUB_OUTPUT
-            fi
-          fi
 
           # Check if listener exists on this ALB
           EXISTING_LISTENER=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text 2>/dev/null || echo "")

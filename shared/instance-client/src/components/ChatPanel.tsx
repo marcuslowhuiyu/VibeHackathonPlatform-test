@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface ToolCall {
   name: string;
@@ -123,6 +125,54 @@ function ThinkingIndicator({ text }: { text: string }) {
   );
 }
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const markdownComponents: Record<string, any> = {
+  p: ({ children }: any) => <p className="my-1 text-sm text-gray-200">{children}</p>,
+  h1: ({ children }: any) => <h1 className="text-lg font-bold text-gray-100 mt-3 mb-1">{children}</h1>,
+  h2: ({ children }: any) => <h2 className="text-base font-bold text-gray-100 mt-3 mb-1">{children}</h2>,
+  h3: ({ children }: any) => <h3 className="text-sm font-bold text-gray-100 mt-2 mb-1">{children}</h3>,
+  ul: ({ children }: any) => <ul className="list-disc list-inside my-1 space-y-0.5 text-sm text-gray-200">{children}</ul>,
+  ol: ({ children }: any) => <ol className="list-decimal list-inside my-1 space-y-0.5 text-sm text-gray-200">{children}</ol>,
+  li: ({ children }: any) => <li className="text-sm">{children}</li>,
+  a: ({ href, children }: any) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300">{children}</a>
+  ),
+  code: ({ className, children, ...props }: any) => {
+    const isBlock = className?.includes('language-');
+    if (isBlock) {
+      return (
+        <code className="block bg-gray-800 border border-gray-700 rounded-md p-3 text-xs font-mono text-gray-300 overflow-x-auto whitespace-pre" {...props}>
+          {children}
+        </code>
+      );
+    }
+    return <code className="bg-gray-800 text-blue-300 px-1 py-0.5 rounded text-xs font-mono" {...props}>{children}</code>;
+  },
+  pre: ({ children }: any) => <pre className="my-2">{children}</pre>,
+  blockquote: ({ children }: any) => (
+    <blockquote className="border-l-2 border-gray-600 pl-3 my-2 text-gray-400 italic">{children}</blockquote>
+  ),
+  strong: ({ children }: any) => <strong className="font-bold text-gray-100">{children}</strong>,
+  em: ({ children }: any) => <em className="italic">{children}</em>,
+  hr: () => <hr className="border-gray-700 my-3" />,
+  table: ({ children }: any) => (
+    <div className="overflow-x-auto my-2"><table className="text-xs border-collapse border border-gray-700">{children}</table></div>
+  ),
+  th: ({ children }: any) => <th className="border border-gray-700 bg-gray-800 px-2 py-1 text-left text-gray-300 font-medium">{children}</th>,
+  td: ({ children }: any) => <td className="border border-gray-700 px-2 py-1 text-gray-400">{children}</td>,
+};
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <div className="text-sm text-gray-200 break-words">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 export default function ChatPanel({ messages, prefillMessage, onSendMessage, isThinking, thinkingText }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -177,7 +227,11 @@ export default function ChatPanel({ messages, prefillMessage, onSendMessage, isT
                 </span>
               </div>
               <div className="flex-1 min-w-0">
-                <p className={`text-sm whitespace-pre-wrap break-words ${msg.isError ? 'text-red-400' : 'text-gray-200'}`}>{msg.content}</p>
+                {msg.role === 'user' || msg.isError ? (
+                  <p className={`text-sm whitespace-pre-wrap break-words ${msg.isError ? 'text-red-400' : 'text-gray-200'}`}>{msg.content}</p>
+                ) : (
+                  <MarkdownContent content={msg.content} />
+                )}
                 {msg.toolCalls?.map((tool, tIdx) => (
                   <ToolCallCard key={tIdx} tool={tool} />
                 ))}

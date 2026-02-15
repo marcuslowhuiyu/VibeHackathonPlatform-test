@@ -15,42 +15,48 @@ function getAutoMode(width: number): LayoutMode {
 }
 
 function DragHandle({ onDrag }: { onDrag: (deltaX: number) => void }) {
-  const dragging = useRef(false);
-  const lastX = useRef(0);
+  const handleRef = useRef<HTMLDivElement>(null);
+  const startX = useRef(0);
+  const hasMoved = useRef(false);
 
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
-    dragging.current = true;
-    lastX.current = e.clientX;
+    e.stopPropagation();
+    startX.current = e.clientX;
+    hasMoved.current = false;
 
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!dragging.current) return;
-      const delta = ev.clientX - lastX.current;
-      lastX.current = ev.clientX;
-      onDrag(delta);
-    };
-
-    const onMouseUp = () => {
-      dragging.current = false;
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
+    // Capture pointer for reliable tracking even outside the element
+    handleRef.current?.setPointerCapture(e.pointerId);
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
+  }, []);
+
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!handleRef.current?.hasPointerCapture(e.pointerId)) return;
+    const delta = e.clientX - startX.current;
+    // Minimum 2px threshold to prevent accidental micro-shifts on click
+    if (!hasMoved.current && Math.abs(delta) < 2) return;
+    hasMoved.current = true;
+    startX.current = e.clientX;
+    onDrag(delta);
   }, [onDrag]);
+
+  const onPointerUp = useCallback((e: React.PointerEvent) => {
+    handleRef.current?.releasePointerCapture(e.pointerId);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }, []);
 
   return (
     <div
-      onMouseDown={onMouseDown}
-      className="w-1 shrink-0 cursor-col-resize bg-gray-800 hover:bg-blue-500 transition-colors relative group"
+      ref={handleRef}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      className="w-1.5 shrink-0 cursor-col-resize bg-gray-800 hover:bg-blue-500 transition-colors relative group touch-none"
       title="Drag to resize"
     >
-      <div className="absolute inset-y-0 -left-1 -right-1" />
+      <div className="absolute inset-y-0 -left-1.5 -right-1.5" />
     </div>
   );
 }

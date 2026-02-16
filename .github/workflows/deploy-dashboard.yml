@@ -871,22 +871,70 @@ jobs:
             CF_STATUS=$(echo "$DIST_LIST" | head -1 | awk '{print $3}')
             echo "Found existing CloudFront distribution: $CF_ID ($CF_DOMAIN) - Status: $CF_STATUS"
 
-            # Verify the origin matches our current ALB DNS — update if needed
-            CURRENT_ORIGIN=$(aws cloudfront get-distribution-config --id "$CF_ID" --query 'DistributionConfig.Origins.Items[0].DomainName' --output text 2>/dev/null || echo "")
-            echo "Current origin: $CURRENT_ORIGIN, Expected: $ALB_DNS"
-            if [ -n "$CURRENT_ORIGIN" ] && [ "$CURRENT_ORIGIN" != "$ALB_DNS" ]; then
-              echo "Origin mismatch! Updating CloudFront origin to $ALB_DNS..."
-              # Get the current config and ETag, update origin
-              CF_CONFIG_FILE=$(mktemp)
-              aws cloudfront get-distribution-config --id "$CF_ID" --output json > "$CF_CONFIG_FILE" 2>/dev/null
+            # Get the current config to check origin and cache behaviors
+            CF_CONFIG_FILE=$(mktemp)
+            if aws cloudfront get-distribution-config --id "$CF_ID" --output json > "$CF_CONFIG_FILE" 2>&1; then
               CF_ETAG=$(jq -r '.ETag' "$CF_CONFIG_FILE")
-              jq --arg dns "$ALB_DNS" '.DistributionConfig.Origins.Items[0].DomainName = $dns | .DistributionConfig' "$CF_CONFIG_FILE" > "${CF_CONFIG_FILE}.updated"
-              aws cloudfront update-distribution --id "$CF_ID" --if-match "$CF_ETAG" \
-                --distribution-config "file://${CF_CONFIG_FILE}.updated" \
-                --query 'Distribution.DomainName' --output text 2>&1 && \
-                echo "CloudFront origin updated successfully" || \
-                echo "WARNING: Failed to update CloudFront origin. Please update manually in AWS console."
+              CURRENT_ORIGIN=$(jq -r '.DistributionConfig.Origins.Items[0].DomainName' "$CF_CONFIG_FILE")
+              CURRENT_API_BEHAVIORS=$(jq -r '.DistributionConfig.CacheBehaviors.Quantity' "$CF_CONFIG_FILE")
+              CURRENT_DEFAULT_POLICY=$(jq -r '.DistributionConfig.DefaultCacheBehavior.CachePolicyId // empty' "$CF_CONFIG_FILE")
+              echo "Current origin: $CURRENT_ORIGIN, Expected: $ALB_DNS"
+              echo "Current API cache behaviors: $CURRENT_API_BEHAVIORS, Default cache policy: $CURRENT_DEFAULT_POLICY"
+
+              NEEDS_UPDATE=false
+
+              # Fix 1: Update origin if it doesn't match
+              if [ -n "$CURRENT_ORIGIN" ] && [ "$CURRENT_ORIGIN" != "$ALB_DNS" ]; then
+                echo "Origin mismatch — will update to $ALB_DNS"
+                NEEDS_UPDATE=true
+              fi
+
+              # Fix 2: Ensure /api/* has CachingDisabled behavior and default uses CachingOptimized
+              CACHING_DISABLED="4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+              CACHING_OPTIMIZED="658327ea-f89d-4fab-a63d-7e88639e58f6"
+              if [ "$CURRENT_API_BEHAVIORS" == "0" ] || [ "$CURRENT_DEFAULT_POLICY" != "$CACHING_OPTIMIZED" ]; then
+                echo "Cache behavior mismatch — will add /api/* no-cache behavior and set default to CachingOptimized"
+                NEEDS_UPDATE=true
+              fi
+
+              if [ "$NEEDS_UPDATE" == "true" ]; then
+                echo "Updating CloudFront distribution config..."
+                jq --arg dns "$ALB_DNS" \
+                   --arg cachingDisabled "$CACHING_DISABLED" \
+                   --arg cachingOptimized "$CACHING_OPTIMIZED" \
+                   --arg originReqPolicy "216adef6-5c7f-47e4-b989-5492eafa07d3" '
+                  .DistributionConfig |
+                  .Origins.Items[0].DomainName = $dns |
+                  .DefaultCacheBehavior.CachePolicyId = $cachingOptimized |
+                  .CacheBehaviors = {
+                    "Quantity": 1,
+                    "Items": [{
+                      "PathPattern": "/api/*",
+                      "TargetOriginId": .DefaultCacheBehavior.TargetOriginId,
+                      "ViewerProtocolPolicy": "redirect-to-https",
+                      "AllowedMethods": {
+                        "Quantity": 7,
+                        "Items": ["GET","HEAD","OPTIONS","PUT","POST","PATCH","DELETE"],
+                        "CachedMethods": {"Quantity": 2, "Items": ["GET","HEAD"]}
+                      },
+                      "CachePolicyId": $cachingDisabled,
+                      "OriginRequestPolicyId": $originReqPolicy,
+                      "Compress": true
+                    }]
+                  }
+                ' "$CF_CONFIG_FILE" > "${CF_CONFIG_FILE}.updated"
+                aws cloudfront update-distribution --id "$CF_ID" --if-match "$CF_ETAG" \
+                  --distribution-config "file://${CF_CONFIG_FILE}.updated" \
+                  --query 'Distribution.DomainName' --output text 2>&1 && \
+                  echo "CloudFront distribution updated successfully" || \
+                  echo "WARNING: Failed to update CloudFront distribution. Please update manually in AWS console."
+              else
+                echo "CloudFront distribution config is up to date"
+              fi
               rm -f "$CF_CONFIG_FILE" "${CF_CONFIG_FILE}.updated"
+            else
+              echo "WARNING: Could not read CloudFront distribution config (insufficient permissions). Skipping cache behavior update."
+              rm -f "$CF_CONFIG_FILE"
             fi
           fi
 
@@ -915,6 +963,22 @@ jobs:
                     }
                   }]
                 },
+                \"CacheBehaviors\": {
+                  \"Quantity\": 1,
+                  \"Items\": [{
+                    \"PathPattern\": \"/api/*\",
+                    \"TargetOriginId\": \"vibe-dashboard-alb\",
+                    \"ViewerProtocolPolicy\": \"redirect-to-https\",
+                    \"AllowedMethods\": {
+                      \"Quantity\": 7,
+                      \"Items\": [\"GET\", \"HEAD\", \"OPTIONS\", \"PUT\", \"POST\", \"PATCH\", \"DELETE\"],
+                      \"CachedMethods\": { \"Quantity\": 2, \"Items\": [\"GET\", \"HEAD\"] }
+                    },
+                    \"CachePolicyId\": \"4135ea2d-6df8-44a3-9df3-4b5a84be39ad\",
+                    \"OriginRequestPolicyId\": \"216adef6-5c7f-47e4-b989-5492eafa07d3\",
+                    \"Compress\": true
+                  }]
+                },
                 \"DefaultCacheBehavior\": {
                   \"TargetOriginId\": \"vibe-dashboard-alb\",
                   \"ViewerProtocolPolicy\": \"redirect-to-https\",
@@ -923,7 +987,7 @@ jobs:
                     \"Items\": [\"GET\", \"HEAD\", \"OPTIONS\", \"PUT\", \"POST\", \"PATCH\", \"DELETE\"],
                     \"CachedMethods\": { \"Quantity\": 2, \"Items\": [\"GET\", \"HEAD\"] }
                   },
-                  \"CachePolicyId\": \"4135ea2d-6df8-44a3-9df3-4b5a84be39ad\",
+                  \"CachePolicyId\": \"658327ea-f89d-4fab-a63d-7e88639e58f6\",
                   \"OriginRequestPolicyId\": \"216adef6-5c7f-47e4-b989-5492eafa07d3\",
                   \"Compress\": true
                 },
@@ -1074,6 +1138,29 @@ jobs:
               --service $ECS_SERVICE_NAME \
               --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
               --force-new-deployment
+
+            echo "Waiting for deployment to stabilize (up to 10 minutes)..."
+            if ! aws ecs wait services-stable \
+              --cluster ${{ env.ECS_CLUSTER }} \
+              --services $ECS_SERVICE_NAME 2>&1; then
+              echo "::error::ECS deployment did not stabilize! Checking service events..."
+              aws ecs describe-services \
+                --cluster ${{ env.ECS_CLUSTER }} \
+                --services $ECS_SERVICE_NAME \
+                --query 'services[0].events[:10]' --output table 2>&1 || true
+              # Show stopped task reasons
+              STOPPED_TASKS=$(aws ecs list-tasks --cluster ${{ env.ECS_CLUSTER }} --service-name $ECS_SERVICE_NAME --desired-status STOPPED --query 'taskArns[:3]' --output text 2>/dev/null || echo "")
+              if [ -n "$STOPPED_TASKS" ] && [ "$STOPPED_TASKS" != "None" ]; then
+                echo "Recent stopped tasks:"
+                for TASK_ARN in $STOPPED_TASKS; do
+                  aws ecs describe-tasks --cluster ${{ env.ECS_CLUSTER }} --tasks "$TASK_ARN" \
+                    --query 'tasks[0].{status:lastStatus,reason:stoppedReason,container:containers[0].{exitCode:exitCode,reason:reason}}' \
+                    --output json 2>/dev/null || true
+                done
+              fi
+              exit 1
+            fi
+            echo "Deployment stabilized successfully"
           elif [ "$SERVICE_STATUS" == "ACTIVE" ] && [ "$NEEDS_RECREATE" == "true" ]; then
             echo "Deleting service to recreate with new target group..."
             aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SERVICE_NAME --desired-count 0 2>/dev/null || true

@@ -913,8 +913,37 @@ jobs:
               fi
               rm -f "$CF_CONFIG_FILE" "${CF_CONFIG_FILE}.updated"
             else
-              echo "WARNING: Could not read CloudFront distribution config (insufficient permissions). Skipping cache behavior update."
+              echo "Cannot read/update existing CloudFront distribution config. Will delete and recreate with correct settings."
               rm -f "$CF_CONFIG_FILE"
+              # Disable the distribution first (required before deletion)
+              echo "Disabling distribution $CF_ID..."
+              DISABLE_CONFIG=$(aws cloudfront get-distribution --id "$CF_ID" --output json 2>/dev/null || echo "")
+              if [ -n "$DISABLE_CONFIG" ]; then
+                DISABLE_ETAG=$(echo "$DISABLE_CONFIG" | jq -r '.ETag')
+                echo "$DISABLE_CONFIG" | jq '.Distribution.DistributionConfig.Enabled = false | .Distribution.DistributionConfig' > /tmp/cf-disable.json
+                aws cloudfront update-distribution --id "$CF_ID" --if-match "$DISABLE_ETAG" \
+                  --distribution-config file:///tmp/cf-disable.json --output text --query 'Distribution.Status' 2>&1 && \
+                  echo "Distribution disabled, waiting for deployment..." || \
+                  echo "WARNING: Could not disable distribution"
+                # Wait for the distribution to finish deploying the disable
+                for i in {1..60}; do
+                  STATUS=$(aws cloudfront get-distribution --id "$CF_ID" --query 'Distribution.Status' --output text 2>/dev/null || echo "Unknown")
+                  if [ "$STATUS" == "Deployed" ]; then
+                    echo "Distribution is Deployed (disabled). Deleting..."
+                    break
+                  fi
+                  echo "Distribution status: $STATUS ($i/60)"
+                  sleep 10
+                done
+                DEL_ETAG=$(aws cloudfront get-distribution --id "$CF_ID" --query 'ETag' --output text 2>/dev/null || echo "")
+                aws cloudfront delete-distribution --id "$CF_ID" --if-match "$DEL_ETAG" 2>&1 && \
+                  echo "Distribution $CF_ID deleted" || \
+                  echo "WARNING: Could not delete distribution $CF_ID"
+                rm -f /tmp/cf-disable.json
+              fi
+              # Clear CF_ID so a new distribution is created below
+              CF_ID=""
+              CF_DOMAIN=""
             fi
           fi
 

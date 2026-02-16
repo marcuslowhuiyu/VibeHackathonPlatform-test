@@ -1,0 +1,9 @@
+.git
+.github
+dashboard
+docs
+infra
+node_modules
+**/node_modules
+**/.env
+*.md

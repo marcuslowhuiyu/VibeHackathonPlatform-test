@@ -11,9 +11,8 @@ on:
       - 'test/**'
     paths:
       - 'dashboard/**'
-      - 'continue-instance/**'
-      - 'cline-instance/**'
-      - 'vibe-instance/**'
+      - '*-instance/**'
+      - 'shared/**'
       - '.github/workflows/deploy-dashboard.yml'
   workflow_dispatch:
     inputs:
@@ -36,6 +35,77 @@ env:
   CONTAINER_NAME: vibe-dashboard
 
 jobs:
+  detect:
+    name: Detect Instance Changes
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.scan.outputs.matrix }}
+      has_instances: ${{ steps.scan.outputs.has_instances }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
+
+      - name: Scan for changed instances
+        id: scan
+        run: |
+          MATRIX="[]"
+
+          for dir in *-instance/; do
+            [ -f "$dir/Dockerfile" ] || continue
+
+            # Derive tag: strip trailing / and -instance suffix
+            TAG="${dir%/}"
+            TAG="${TAG%-instance}"
+
+            # Check if this instance changed
+            CHANGED=false
+            if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+              CHANGED=true
+            elif git rev-parse HEAD~1 >/dev/null 2>&1; then
+              # For merge commits, HEAD~1 only shows the merge diff.
+              # Use --first-parent + diff against HEAD~1 for non-merges,
+              # or diff both parents for merge commits to capture all changes.
+              if git rev-parse HEAD^2 >/dev/null 2>&1; then
+                # Merge commit: diff the merge base of both parents against HEAD
+                MERGE_BASE=$(git merge-base HEAD^1 HEAD^2)
+                DIFF_FILES=$(git diff --name-only "$MERGE_BASE" HEAD)
+              else
+                DIFF_FILES=$(git diff --name-only HEAD~1 HEAD)
+              fi
+              if echo "$DIFF_FILES" | grep -qE "^${dir}|^shared/"; then
+                CHANGED=true
+              fi
+            else
+              # No parent commit — treat all as changed
+              if git ls-files | grep -qE "^${dir}|^shared/"; then
+                CHANGED=true
+              fi
+            fi
+
+            if [ "$CHANGED" == "true" ]; then
+              EXTRA=""
+              if [ "$TAG" == "continue" ]; then
+                EXTRA=",latest"
+              fi
+
+              MATRIX=$(echo "$MATRIX" | jq -c \
+                --arg dir "${dir%/}" --arg tag "$TAG" --arg extra "$EXTRA" \
+                '. += [{"dir": $dir, "tag": $tag, "extra": $extra}]')
+            fi
+          done
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+          if [ "$MATRIX" == "[]" ]; then
+            echo "has_instances=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_instances=true" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Detected instances: $MATRIX"
+
   build:
     name: Build Images
     runs-on: ubuntu-latest
@@ -108,8 +178,8 @@ jobs:
             echo "ecs_service=vibe-dashboard-staging" >> $GITHUB_OUTPUT
             echo "task_family=vibe-dashboard-staging" >> $GITHUB_OUTPUT
             echo "tg_name=vibe-dashboard-staging-tg" >> $GITHUB_OUTPUT
-            echo "task_cpu=256" >> $GITHUB_OUTPUT
-            echo "task_memory=512" >> $GITHUB_OUTPUT
+            echo "task_cpu=512" >> $GITHUB_OUTPUT
+            echo "task_memory=1024" >> $GITHUB_OUTPUT
           else
             # Feature branch - minimal resources
             echo "ecs_service=vibe-test-$BRANCH_SLUG" >> $GITHUB_OUTPUT
@@ -158,64 +228,69 @@ jobs:
           # Disable cache to ensure fresh builds with latest code
           no-cache: true
 
-      - name: Check if coding labs changed
-        id: changes
+
+  build-instances:
+    name: Build ${{ matrix.instance.tag }} instance
+    needs: [build, detect]
+    if: needs.detect.outputs.has_instances == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        instance: ${{ fromJson(needs.detect.outputs.matrix) }}
+      fail-fast: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repository exists
         run: |
-          # Check if Continue setup changed
-          if git diff --name-only HEAD~1 HEAD | grep -q "^continue-instance/"; then
-            echo "continue_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "continue_changed=false" >> $GITHUB_OUTPUT
-          fi
+          aws ecr describe-repositories --repository-names ${{ env.ECR_CODING_LAB }} 2>/dev/null || \
+            aws ecr create-repository --repository-name ${{ env.ECR_CODING_LAB }}
 
-          # Check if Cline setup changed
-          if git diff --name-only HEAD~1 HEAD | grep -q "^cline-instance/"; then
-            echo "cline_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "cline_changed=false" >> $GITHUB_OUTPUT
-          fi
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-          # Check if Vibe setup changed
-          if git diff --name-only HEAD~1 HEAD | grep -q "^vibe-instance/"; then
-            echo "vibe_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "vibe_changed=false" >> $GITHUB_OUTPUT
-          fi
+      - name: Compute image tags
+        id: tags
+        run: |
+          REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+          REPO="${{ env.ECR_CODING_LAB }}"
+          TAG="${{ matrix.instance.tag }}"
+          EXTRA="${{ matrix.instance.extra }}"
 
-      - name: Build and push Continue image
-        if: steps.changes.outputs.continue_changed == 'true' || github.event_name == 'workflow_dispatch'
+          TAGS="${REGISTRY}/${REPO}:${TAG}"
+
+          IFS=',' read -ra EXTRA_TAGS <<< "$EXTRA"
+          for et in "${EXTRA_TAGS[@]}"; do
+            [ -n "$et" ] && TAGS=$(printf '%s\n%s/%s:%s' "$TAGS" "$REGISTRY" "$REPO" "$et")
+          done
+
+          {
+            echo "tags<<EOF"
+            echo "$TAGS"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Build and push ${{ matrix.instance.tag }} image
         uses: docker/build-push-action@v5
         with:
-          context: ./continue-instance
+          context: .
+          file: ./${{ matrix.instance.dir }}/Dockerfile
           push: true
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:continue
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push Cline image
-        if: steps.changes.outputs.cline_changed == 'true' || github.event_name == 'workflow_dispatch'
-        uses: docker/build-push-action@v5
-        with:
-          context: ./cline-instance
-          push: true
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:cline
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push Vibe image
-        if: steps.changes.outputs.vibe_changed == 'true' || github.event_name == 'workflow_dispatch'
-        uses: docker/build-push-action@v5
-        with:
-          context: ./vibe-instance
-          push: true
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:vibe
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_CODING_LAB }}:vibe-pro
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.instance.tag }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.instance.tag }}
 
   deploy:
     name: Deploy to ECS
@@ -630,23 +705,83 @@ jobs:
           ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].DNSName' --output text)
           echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
 
-          # Check if target group exists - REUSE if it does, only create if missing
+          # Check if target group exists
           TG_ARN=$(aws elbv2 describe-target-groups --names $TG_NAME --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
 
+          CREATE_TG=false
           if [ "$TG_ARN" != "None" ] && [ -n "$TG_ARN" ]; then
-            echo "Reusing existing target group: $TG_ARN"
+            # Target group exists — check if it's on the correct ALB
+            TG_ALB_ARNS=$(aws elbv2 describe-target-groups --target-group-arns $TG_ARN --query 'TargetGroups[0].LoadBalancerArns' --output text 2>/dev/null || echo "")
+
+            if [ -n "$TG_ALB_ARNS" ] && [ "$TG_ALB_ARNS" != "None" ]; then
+              CURRENT_TG_ALB=$(echo $TG_ALB_ARNS | awk '{print $1}')
+              if [ "$CURRENT_TG_ALB" == "$ALB_ARN" ]; then
+                echo "Target group correctly associated with our ALB"
+              else
+                echo "WARNING: Target group is associated with wrong ALB ($CURRENT_TG_ALB instead of $ALB_ARN)"
+                echo "A target group can only be associated with one ALB. Removing all references from wrong ALB..."
+
+                # Find and remove ALL references on the wrong ALB (listeners AND rules)
+                WRONG_LISTENERS=$(aws elbv2 describe-listeners --load-balancer-arn "$CURRENT_TG_ALB" --query 'Listeners[*].ListenerArn' --output text 2>/dev/null || echo "")
+                echo "Listeners on wrong ALB: $WRONG_LISTENERS"
+                for LIS in $WRONG_LISTENERS; do
+                  # Check default action
+                  LIS_TG=$(aws elbv2 describe-listeners --listener-arns "$LIS" --query 'Listeners[0].DefaultActions[0].TargetGroupArn' --output text 2>/dev/null || echo "")
+                  echo "  Listener $LIS default -> $LIS_TG"
+                  if [ "$LIS_TG" == "$TG_ARN" ]; then
+                    echo "  Deleting listener (default action references our TG)..."
+                    aws elbv2 delete-listener --listener-arn "$LIS" 2>&1 || true
+                  fi
+
+                  # Check listener rules for forward actions to our TG
+                  RULES=$(aws elbv2 describe-rules --listener-arn "$LIS" --query 'Rules[*].RuleArn' --output text 2>/dev/null || echo "")
+                  for RULE in $RULES; do
+                    RULE_TG=$(aws elbv2 describe-rules --rule-arns "$RULE" --query 'Rules[0].Actions[0].TargetGroupArn' --output text 2>/dev/null || echo "")
+                    if [ "$RULE_TG" == "$TG_ARN" ]; then
+                      echo "  Rule $RULE references our TG - deleting..."
+                      aws elbv2 delete-rule --rule-arn "$RULE" 2>&1 || true
+                    fi
+                  done
+                done
+
+                # Deregister any lingering targets
+                TARGETS=$(aws elbv2 describe-target-health --target-group-arn "$TG_ARN" --query 'TargetHealthDescriptions[*].Target' --output json 2>/dev/null || echo "[]")
+                if [ "$TARGETS" != "[]" ] && [ -n "$TARGETS" ]; then
+                  echo "Deregistering targets: $TARGETS"
+                  aws elbv2 deregister-targets --target-group-arn "$TG_ARN" --targets "$TARGETS" 2>/dev/null || true
+                fi
+
+                # Try to delete the old TG and recreate
+                echo "Attempting to delete target group to recreate on correct ALB..."
+                if aws elbv2 delete-target-group --target-group-arn "$TG_ARN" 2>&1; then
+                  echo "Target group deleted successfully"
+                  CREATE_TG=true
+                else
+                  echo "Could not delete target group. Creating with alternate name..."
+                  TG_NAME="${TG_NAME}-v2"
+                  CREATE_TG=true
+                fi
+              fi
+            else
+              echo "Reusing existing target group (no ALB association): $TG_ARN"
+            fi
 
             # Update health check settings on existing target group
-            echo "Updating target group health check settings..."
-            aws elbv2 modify-target-group \
-              --target-group-arn $TG_ARN \
-              --health-check-path /api/health \
-              --health-check-interval-seconds 30 \
-              --health-check-timeout-seconds 10 \
-              --healthy-threshold-count 2 \
-              --unhealthy-threshold-count 3 || true
+            if [ "$CREATE_TG" == "false" ]; then
+              echo "Updating target group health check settings..."
+              aws elbv2 modify-target-group \
+                --target-group-arn $TG_ARN \
+                --health-check-path /api/health \
+                --health-check-interval-seconds 30 \
+                --health-check-timeout-seconds 10 \
+                --healthy-threshold-count 2 \
+                --unhealthy-threshold-count 3 || true
+            fi
           else
-            # Create new target group only if it doesn't exist
+            CREATE_TG=true
+          fi
+
+          if [ "$CREATE_TG" == "true" ]; then
             echo "Creating target group: $TG_NAME"
             TG_ARN=$(aws elbv2 create-target-group \
               --name $TG_NAME \
@@ -660,28 +795,6 @@ jobs:
               --query 'TargetGroups[0].TargetGroupArn' --output text)
           fi
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
-
-          # Check which ALB the target group is currently associated with (if any)
-          TG_ALB_ARNS=$(aws elbv2 describe-target-groups --target-group-arns $TG_ARN --query 'TargetGroups[0].LoadBalancerArns' --output text 2>/dev/null || echo "")
-
-          if [ -n "$TG_ALB_ARNS" ] && [ "$TG_ALB_ARNS" != "None" ]; then
-            # Target group is already associated with an ALB
-            CURRENT_TG_ALB=$(echo $TG_ALB_ARNS | awk '{print $1}')
-            echo "Target group is already associated with ALB: $CURRENT_TG_ALB"
-
-            if [ "$CURRENT_TG_ALB" == "$ALB_ARN" ]; then
-              echo "Target group is correctly associated with our ALB"
-            else
-              # Target group is associated with a different ALB - use that one instead
-              echo "Using existing ALB that target group is associated with"
-              ALB_ARN=$CURRENT_TG_ALB
-              ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].DNSName' --output text)
-              ALB_NAME=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN --query 'LoadBalancers[0].LoadBalancerName' --output text)
-              echo "alb_arn=$ALB_ARN" >> $GITHUB_OUTPUT
-              echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
-              echo "alb_name=$ALB_NAME" >> $GITHUB_OUTPUT
-            fi
-          fi
 
           # Check if listener exists on this ALB
           EXISTING_LISTENER=$(aws elbv2 describe-listeners --load-balancer-arn $ALB_ARN --query 'Listeners[?Port==`80`].ListenerArn' --output text 2>/dev/null || echo "")
@@ -737,6 +850,101 @@ jobs:
             CF_DOMAIN=$(echo "$DIST_LIST" | head -1 | awk '{print $2}')
             CF_STATUS=$(echo "$DIST_LIST" | head -1 | awk '{print $3}')
             echo "Found existing CloudFront distribution: $CF_ID ($CF_DOMAIN) - Status: $CF_STATUS"
+
+            # Get the current config to check origin and cache behaviors
+            CF_CONFIG_FILE=$(mktemp)
+            if aws cloudfront get-distribution-config --id "$CF_ID" --output json > "$CF_CONFIG_FILE" 2>&1; then
+              CF_ETAG=$(jq -r '.ETag' "$CF_CONFIG_FILE")
+              CURRENT_ORIGIN=$(jq -r '.DistributionConfig.Origins.Items[0].DomainName' "$CF_CONFIG_FILE")
+              CURRENT_API_BEHAVIORS=$(jq -r '.DistributionConfig.CacheBehaviors.Quantity' "$CF_CONFIG_FILE")
+              CURRENT_DEFAULT_POLICY=$(jq -r '.DistributionConfig.DefaultCacheBehavior.CachePolicyId // empty' "$CF_CONFIG_FILE")
+              echo "Current origin: $CURRENT_ORIGIN, Expected: $ALB_DNS"
+              echo "Current API cache behaviors: $CURRENT_API_BEHAVIORS, Default cache policy: $CURRENT_DEFAULT_POLICY"
+
+              NEEDS_UPDATE=false
+
+              # Fix 1: Update origin if it doesn't match
+              if [ -n "$CURRENT_ORIGIN" ] && [ "$CURRENT_ORIGIN" != "$ALB_DNS" ]; then
+                echo "Origin mismatch — will update to $ALB_DNS"
+                NEEDS_UPDATE=true
+              fi
+
+              # Fix 2: Ensure /api/* has CachingDisabled behavior and default uses CachingOptimized
+              CACHING_DISABLED="4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+              CACHING_OPTIMIZED="658327ea-f89d-4fab-a63d-7e88639e58f6"
+              if [ "$CURRENT_API_BEHAVIORS" == "0" ] || [ "$CURRENT_DEFAULT_POLICY" != "$CACHING_OPTIMIZED" ]; then
+                echo "Cache behavior mismatch — will add /api/* no-cache behavior and set default to CachingOptimized"
+                NEEDS_UPDATE=true
+              fi
+
+              if [ "$NEEDS_UPDATE" == "true" ]; then
+                echo "Updating CloudFront distribution config..."
+                jq --arg dns "$ALB_DNS" \
+                   --arg cachingDisabled "$CACHING_DISABLED" \
+                   --arg cachingOptimized "$CACHING_OPTIMIZED" \
+                   --arg originReqPolicy "216adef6-5c7f-47e4-b989-5492eafa07d3" '
+                  .DistributionConfig |
+                  .Origins.Items[0].DomainName = $dns |
+                  .DefaultCacheBehavior.CachePolicyId = $cachingOptimized |
+                  .CacheBehaviors = {
+                    "Quantity": 1,
+                    "Items": [{
+                      "PathPattern": "/api/*",
+                      "TargetOriginId": .DefaultCacheBehavior.TargetOriginId,
+                      "ViewerProtocolPolicy": "redirect-to-https",
+                      "AllowedMethods": {
+                        "Quantity": 7,
+                        "Items": ["GET","HEAD","OPTIONS","PUT","POST","PATCH","DELETE"],
+                        "CachedMethods": {"Quantity": 2, "Items": ["GET","HEAD"]}
+                      },
+                      "CachePolicyId": $cachingDisabled,
+                      "OriginRequestPolicyId": $originReqPolicy,
+                      "Compress": true
+                    }]
+                  }
+                ' "$CF_CONFIG_FILE" > "${CF_CONFIG_FILE}.updated"
+                aws cloudfront update-distribution --id "$CF_ID" --if-match "$CF_ETAG" \
+                  --distribution-config "file://${CF_CONFIG_FILE}.updated" \
+                  --query 'Distribution.DomainName' --output text 2>&1 && \
+                  echo "CloudFront distribution updated successfully" || \
+                  echo "WARNING: Failed to update CloudFront distribution. Please update manually in AWS console."
+              else
+                echo "CloudFront distribution config is up to date"
+              fi
+              rm -f "$CF_CONFIG_FILE" "${CF_CONFIG_FILE}.updated"
+            else
+              echo "Cannot read/update existing CloudFront distribution config. Will delete and recreate with correct settings."
+              rm -f "$CF_CONFIG_FILE"
+              # Disable the distribution first (required before deletion)
+              echo "Disabling distribution $CF_ID..."
+              DISABLE_CONFIG=$(aws cloudfront get-distribution --id "$CF_ID" --output json 2>/dev/null || echo "")
+              if [ -n "$DISABLE_CONFIG" ]; then
+                DISABLE_ETAG=$(echo "$DISABLE_CONFIG" | jq -r '.ETag')
+                echo "$DISABLE_CONFIG" | jq '.Distribution.DistributionConfig.Enabled = false | .Distribution.DistributionConfig' > /tmp/cf-disable.json
+                aws cloudfront update-distribution --id "$CF_ID" --if-match "$DISABLE_ETAG" \
+                  --distribution-config file:///tmp/cf-disable.json --output text --query 'Distribution.Status' 2>&1 && \
+                  echo "Distribution disabled, waiting for deployment..." || \
+                  echo "WARNING: Could not disable distribution"
+                # Wait for the distribution to finish deploying the disable
+                for i in {1..60}; do
+                  STATUS=$(aws cloudfront get-distribution --id "$CF_ID" --query 'Distribution.Status' --output text 2>/dev/null || echo "Unknown")
+                  if [ "$STATUS" == "Deployed" ]; then
+                    echo "Distribution is Deployed (disabled). Deleting..."
+                    break
+                  fi
+                  echo "Distribution status: $STATUS ($i/60)"
+                  sleep 10
+                done
+                DEL_ETAG=$(aws cloudfront get-distribution --id "$CF_ID" --query 'ETag' --output text 2>/dev/null || echo "")
+                aws cloudfront delete-distribution --id "$CF_ID" --if-match "$DEL_ETAG" 2>&1 && \
+                  echo "Distribution $CF_ID deleted" || \
+                  echo "WARNING: Could not delete distribution $CF_ID"
+                rm -f /tmp/cf-disable.json
+              fi
+              # Clear CF_ID so a new distribution is created below
+              CF_ID=""
+              CF_DOMAIN=""
+            fi
           fi
 
           if [ -z "$CF_ID" ]; then
@@ -764,6 +972,22 @@ jobs:
                     }
                   }]
                 },
+                \"CacheBehaviors\": {
+                  \"Quantity\": 1,
+                  \"Items\": [{
+                    \"PathPattern\": \"/api/*\",
+                    \"TargetOriginId\": \"vibe-dashboard-alb\",
+                    \"ViewerProtocolPolicy\": \"redirect-to-https\",
+                    \"AllowedMethods\": {
+                      \"Quantity\": 7,
+                      \"Items\": [\"GET\", \"HEAD\", \"OPTIONS\", \"PUT\", \"POST\", \"PATCH\", \"DELETE\"],
+                      \"CachedMethods\": { \"Quantity\": 2, \"Items\": [\"GET\", \"HEAD\"] }
+                    },
+                    \"CachePolicyId\": \"4135ea2d-6df8-44a3-9df3-4b5a84be39ad\",
+                    \"OriginRequestPolicyId\": \"216adef6-5c7f-47e4-b989-5492eafa07d3\",
+                    \"Compress\": true
+                  }]
+                },
                 \"DefaultCacheBehavior\": {
                   \"TargetOriginId\": \"vibe-dashboard-alb\",
                   \"ViewerProtocolPolicy\": \"redirect-to-https\",
@@ -772,7 +996,7 @@ jobs:
                     \"Items\": [\"GET\", \"HEAD\", \"OPTIONS\", \"PUT\", \"POST\", \"PATCH\", \"DELETE\"],
                     \"CachedMethods\": { \"Quantity\": 2, \"Items\": [\"GET\", \"HEAD\"] }
                   },
-                  \"CachePolicyId\": \"4135ea2d-6df8-44a3-9df3-4b5a84be39ad\",
+                  \"CachePolicyId\": \"658327ea-f89d-4fab-a63d-7e88639e58f6\",
                   \"OriginRequestPolicyId\": \"216adef6-5c7f-47e4-b989-5492eafa07d3\",
                   \"Compress\": true
                 },
@@ -923,6 +1147,29 @@ jobs:
               --service $ECS_SERVICE_NAME \
               --task-definition ${{ steps.task-def.outputs.task_def_arn }} \
               --force-new-deployment
+
+            echo "Waiting for deployment to stabilize (up to 10 minutes)..."
+            if ! aws ecs wait services-stable \
+              --cluster ${{ env.ECS_CLUSTER }} \
+              --services $ECS_SERVICE_NAME 2>&1; then
+              echo "::error::ECS deployment did not stabilize! Checking service events..."
+              aws ecs describe-services \
+                --cluster ${{ env.ECS_CLUSTER }} \
+                --services $ECS_SERVICE_NAME \
+                --query 'services[0].events[:10]' --output table 2>&1 || true
+              # Show stopped task reasons
+              STOPPED_TASKS=$(aws ecs list-tasks --cluster ${{ env.ECS_CLUSTER }} --service-name $ECS_SERVICE_NAME --desired-status STOPPED --query 'taskArns[:3]' --output text 2>/dev/null || echo "")
+              if [ -n "$STOPPED_TASKS" ] && [ "$STOPPED_TASKS" != "None" ]; then
+                echo "Recent stopped tasks:"
+                for TASK_ARN in $STOPPED_TASKS; do
+                  aws ecs describe-tasks --cluster ${{ env.ECS_CLUSTER }} --tasks "$TASK_ARN" \
+                    --query 'tasks[0].{status:lastStatus,reason:stoppedReason,container:containers[0].{exitCode:exitCode,reason:reason}}' \
+                    --output json 2>/dev/null || true
+                done
+              fi
+              exit 1
+            fi
+            echo "Deployment stabilized successfully"
           elif [ "$SERVICE_STATUS" == "ACTIVE" ] && [ "$NEEDS_RECREATE" == "true" ]; then
             echo "Deleting service to recreate with new target group..."
             aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SERVICE_NAME --desired-count 0 2>/dev/null || true
@@ -979,10 +1226,19 @@ jobs:
               --deployment-configuration "minimumHealthyPercent=0,maximumPercent=200" \
               --health-check-grace-period-seconds 120
           else
-            echo "Creating new service..."
-            # Delete inactive service if exists
+            echo "Creating new service (current status: $SERVICE_STATUS)..."
+            # Delete inactive/missing service if exists
             aws ecs delete-service --cluster ${{ env.ECS_CLUSTER }} --service $ECS_SERVICE_NAME --force 2>/dev/null || true
-            sleep 5
+
+            # Wait for service to be fully cleaned up
+            for i in {1..30}; do
+              STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services $ECS_SERVICE_NAME --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+              if [ "$STATUS" == "INACTIVE" ] || [ "$STATUS" == "MISSING" ] || [ "$STATUS" == "None" ]; then
+                break
+              fi
+              echo "Waiting for old service cleanup: $STATUS ($i/30)"
+              sleep 5
+            done
 
             aws ecs create-service \
               --cluster ${{ env.ECS_CLUSTER }} \

@@ -76,9 +76,17 @@ function getStatusIcon(status: string) {
 // ==========================================
 const EXTENSION_BADGES: Record<string, { label: string; color: string; bgColor: string }> = {
   continue: { label: 'Continue', color: 'text-emerald-400', bgColor: 'bg-emerald-900/50 border-emerald-600' },
-  // To add new extensions, uncomment and configure:
-  // cline: { label: 'Cline', color: 'text-violet-400', bgColor: 'bg-violet-900/50 border-violet-600' },
-  // 'roo-code': { label: 'Roo Code', color: 'text-amber-400', bgColor: 'bg-amber-900/50 border-amber-600' },
+  cline: { label: 'Cline', color: 'text-violet-400', bgColor: 'bg-violet-900/50 border-violet-600' },
+  vibe: { label: 'Vibe', color: 'text-pink-400', bgColor: 'bg-pink-900/50 border-pink-600' },
+  'loclaude-lite': { label: 'Loclaude Lite', color: 'text-cyan-400', bgColor: 'bg-cyan-900/50 border-cyan-600' },
+  loclaude: { label: 'Loclaude', color: 'text-orange-400', bgColor: 'bg-orange-900/50 border-orange-600' },
+}
+
+// Helper to determine studio label based on AI extension
+function getStudioLabel(aiExtension?: string): string {
+  if (aiExtension === 'loclaude-lite' || aiExtension === 'loclaude') return 'Loclaude Studio'
+  if (aiExtension === 'vibe') return 'Vibe Studio'
+  return 'VS Code'
 }
 
 function ExtensionBadge({ extension }: { extension?: string }) {
@@ -227,6 +235,20 @@ export default function InstanceList({ instances }: InstanceListProps) {
 
   const stopMutation = useMutation({
     mutationFn: api.stopInstance,
+    onMutate: async (id: string) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['instances'] })
+      // Optimistically update to 'stopping'
+      queryClient.setQueryData<{ instances: Instance[] }>(['instances'], (old) => {
+        if (!old) return old
+        return {
+          ...old,
+          instances: old.instances.map((inst) =>
+            inst.id === id ? { ...inst, status: 'stopping' } : inst
+          ),
+        }
+      })
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['instances'] })
     },
@@ -280,7 +302,7 @@ export default function InstanceList({ instances }: InstanceListProps) {
     const links = activeWithUrls
       .map(
         (i) =>
-          `${i.participant_name || i.id}${i.participant_email ? ` (${i.participant_email})` : ''}\n${i.ai_extension === 'vibe' || i.ai_extension === 'vibe-pro' ? 'Vibe Studio' : 'VS Code'}: ${i.vscode_url}\nReact App: ${i.app_url || 'N/A'}\n`
+          `${i.participant_name || i.id}${i.participant_email ? ` (${i.participant_email})` : ''}\n${getStudioLabel(i.ai_extension)}: ${i.vscode_url}\nReact App: ${i.app_url || 'N/A'}\n`
       )
       .join('\n')
 
@@ -488,7 +510,7 @@ export default function InstanceList({ instances }: InstanceListProps) {
                         rel="noopener noreferrer"
                         className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-sm flex items-center gap-1"
                       >
-                        {instance.ai_extension === 'vibe' || instance.ai_extension === 'vibe-pro' ? 'Vibe Studio' : 'VS Code'}
+                        {getStudioLabel(instance.ai_extension)}
                         <ExternalLink className="w-3 h-3" />
                       </a>
                       <a
@@ -502,10 +524,25 @@ export default function InstanceList({ instances }: InstanceListProps) {
                       </a>
                     </>
                   ) : (
-                    <span className="text-gray-400 text-sm">
-                      {['provisioning', 'pending'].includes(instance.status.toLowerCase())
-                        ? 'Starting up...'
-                        : 'No URLs available'}
+                    <span className="text-sm flex items-center gap-2">
+                      {instance.status.toLowerCase() === 'provisioning' ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin text-yellow-400" />
+                          <span className="text-yellow-400">Creating container...</span>
+                        </>
+                      ) : instance.status.toLowerCase() === 'pending' ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin text-yellow-400" />
+                          <span className="text-yellow-400">Starting services...</span>
+                        </>
+                      ) : instance.status.toLowerCase() === 'running' ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
+                          <span className="text-blue-400">Registering with load balancer...</span>
+                        </>
+                      ) : (
+                        <span className="text-gray-400">No URLs available</span>
+                      )}
                     </span>
                   )}
                   {/* CloudFront deploying indicator */}
@@ -659,7 +696,7 @@ export default function InstanceList({ instances }: InstanceListProps) {
                       )}
 
                       <div className="flex flex-col">
-                        <span className="text-gray-500 text-xs">{instance.ai_extension === 'vibe' || instance.ai_extension === 'vibe-pro' ? 'Vibe Studio URL' : 'VS Code URL'}</span>
+                        <span className="text-gray-500 text-xs">{getStudioLabel(instance.ai_extension)} URL</span>
                         {instance.vscode_url ? (
                           <div className="flex items-center gap-1">
                             {instance.vscode_url.startsWith('https://') ? (

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { runFullSetup, checkSetupStatus, getDockerPushCommands, checkDockerAvailable, buildAndPushImage } from '../services/aws-setup.js';
@@ -29,7 +29,6 @@ function initEfsClineSetup() {
 
   try {
     if (!existsSync(EFS_CLINE_DIR)) {
-      const { mkdirSync, copyFileSync } = require('fs');
       mkdirSync(EFS_CLINE_DIR, { recursive: true });
 
       // Copy default files from container to EFS

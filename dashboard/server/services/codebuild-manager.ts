@@ -47,7 +47,7 @@ export async function createProject(
 ): Promise<void> {
   const client = getClient();
 
-  // Create the buildspec inline - builds both Continue and Cline extensions
+  // Create the buildspec inline - builds all instance types
   const buildspec = `version: 0.2
 phases:
   pre_build:
@@ -67,11 +67,29 @@ phases:
       - docker build -t vibe-coding-lab:cline .
       - docker tag vibe-coding-lab:cline $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
       - cd ..
+      - echo "=== Building Vibe from vibe-instance/ ==="
+      - cd vibe-instance
+      - docker build -t vibe-coding-lab:vibe .
+      - docker tag vibe-coding-lab:vibe $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe
+      - cd ..
+      - echo "=== Building Loclaude Lite from loclaude-lite-instance/ ==="
+      - cd loclaude-lite-instance
+      - docker build -t vibe-coding-lab:loclaude-lite .
+      - docker tag vibe-coding-lab:loclaude-lite $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:loclaude-lite
+      - cd ..
+      - echo "=== Building Loclaude from loclaude-instance/ ==="
+      - cd loclaude-instance
+      - docker build -t vibe-coding-lab:loclaude .
+      - docker tag vibe-coding-lab:loclaude $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:loclaude
+      - cd ..
   post_build:
     commands:
       - echo Pushing the Docker images...
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:continue
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:cline
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:vibe
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:loclaude-lite
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:loclaude
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/vibe-coding-lab:latest
       - echo Build completed on \`date\`
 `;

@@ -5,7 +5,7 @@ import { Plus, Loader2, Minus, AlertTriangle, CheckCircle, Package, Bot, Users }
 // AI EXTENSION CONFIGURATION
 // Add new AI extensions here to scale support
 // ==========================================
-type AIExtension = 'continue' | 'cline' | 'vibe' | 'vibe-pro'
+type AIExtension = 'continue' | 'cline' | 'vibe' | 'loclaude-lite' | 'loclaude'
 
 interface ExtensionConfig {
   name: string
@@ -32,16 +32,23 @@ const AI_EXTENSIONS: Record<AIExtension, ExtensionConfig> = {
   },
   vibe: {
     name: 'Vibe',
-    description: 'AI-powered coding for non-technical users. Chat + live preview UI.',
+    description: 'AI-powered coding with chat UI, live preview, and codebase-aware AI context.',
     color: 'text-pink-400',
     bgColor: 'bg-pink-600',
     enabled: true,
   },
-  'vibe-pro': {
-    name: 'Vibe Pro',
-    description: 'Enhanced Vibe with codebase-aware AI. Better for complex multi-file apps.',
-    color: 'text-amber-400',
-    bgColor: 'bg-amber-600',
+  'loclaude-lite': {
+    name: 'Loclaude Lite',
+    description: 'Enhanced AI with shell commands, AST code understanding, and smart search.',
+    color: 'text-cyan-400',
+    bgColor: 'bg-cyan-600',
+    enabled: true,
+  },
+  loclaude: {
+    name: 'Loclaude',
+    description: 'Claude Code-style AI with sub-agents, extended thinking, and persistent shell.',
+    color: 'text-orange-400',
+    bgColor: 'bg-orange-600',
     enabled: true,
   },
 }

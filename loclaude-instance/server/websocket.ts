@@ -127,16 +127,13 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
 
       // ---- preview_error (auto-fix) -------------------------------------
       if (parsed.type === 'preview_error' && typeof parsed.error === 'string') {
-        // Debounce and prevent infinite loops
         const now = Date.now();
-        if (now - lastErrorTime < 5000) return; // 5s cooldown between auto-fixes
-        if (autoFixAttempts >= 3) return; // Max 3 attempts
+        if (now - lastErrorTime < 5000) return;
+        if (autoFixAttempts >= 3) return;
         lastErrorTime = now;
         autoFixAttempts++;
 
         const errorMessage = `The live preview has an error:\n\`\`\`\n${parsed.error}\n\`\`\`\nPlease investigate and fix this error.`;
-
-        // Show the error in chat as a system message
         send(ws, { type: 'agent:text', content: `[Auto-detected error] ${parsed.error}\n\nAttempting to fix...` });
 
         try {

@@ -38,8 +38,8 @@ RUN mkdir temp-app \
     && npm install
 
 # 6. Copy configuration files
-COPY --chown=openvscode-server:openvscode-server cline-config.json /home/workspace/cline-config.json
-COPY --chown=openvscode-server:openvscode-server entrypoint.sh /home/workspace/entrypoint.sh
+COPY --chown=openvscode-server:openvscode-server cline-instance/cline-config.json /home/workspace/cline-config.json
+COPY --chown=openvscode-server:openvscode-server cline-instance/entrypoint.sh /home/workspace/entrypoint.sh
 
 # 7. Fix line endings and set permissions (need root for dos2unix)
 USER root

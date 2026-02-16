@@ -16,14 +16,17 @@ function getBasePath(): string {
 export function useWebSocket(): {
   messages: Message[];
   isThinking: boolean;
+  thinkingText: string;
   prefillMessage: string;
   currentFileChange: { path: string; content: string } | null;
   sendMessage: (text: string) => void;
   sendElementClick: (info: { tagName: string; textContent: string; selector: string }) => void;
+  sendPreviewError: (error: string) => void;
   basePath: string;
 } {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isThinking, setIsThinking] = useState(false);
+  const [thinkingText, setThinkingText] = useState('');
   const [prefillMessage, setPrefillMessage] = useState('');
   const [currentFileChange, setCurrentFileChange] = useState<{ path: string; content: string } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -52,9 +55,14 @@ export function useWebSocket(): {
         switch (data.type) {
           case 'agent:thinking':
             setIsThinking(true);
+            if (data.text) {
+              setThinkingText((prev) => prev + data.text);
+            }
             break;
 
           case 'agent:text':
+            // Clear thinking text when actual response starts
+            setThinkingText('');
             setMessages((prev) => {
               const updated = [...prev];
               const last = updated[updated.length - 1];
@@ -71,6 +79,7 @@ export function useWebSocket(): {
             break;
 
           case 'agent:tool_call':
+            setThinkingText('');
             setMessages((prev) => {
               const updated = [...prev];
               const last = updated[updated.length - 1];
@@ -107,11 +116,14 @@ export function useWebSocket(): {
             break;
 
           case 'agent:file_changed':
-            setCurrentFileChange({ path: data.path, content: data.content });
+            if (data.path) {
+              setCurrentFileChange({ path: data.path, content: data.content ?? '' });
+            }
             break;
 
           case 'agent:done':
             setIsThinking(false);
+            setThinkingText('');
             break;
 
           case 'prefill':
@@ -120,6 +132,7 @@ export function useWebSocket(): {
 
           case 'error':
             setIsThinking(false);
+            setThinkingText('');
             setMessages((prev) => [
               ...prev,
               { role: 'assistant', content: `Error: ${data.message || 'Something went wrong'}`, isError: true },
@@ -154,6 +167,9 @@ export function useWebSocket(): {
 
   const sendMessage = useCallback((text: string) => {
     setMessages((prev) => [...prev, { role: 'user', content: text }]);
+    // Show thinking indicator immediately (don't wait for server's first event)
+    setIsThinking(true);
+    setThinkingText('');
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'chat', message: text }));
     }
@@ -168,13 +184,21 @@ export function useWebSocket(): {
     [],
   );
 
+  const sendPreviewError = useCallback((error: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'preview_error', error }));
+    }
+  }, []);
+
   return {
     messages,
     isThinking,
+    thinkingText,
     prefillMessage,
     currentFileChange,
     sendMessage,
     sendElementClick,
+    sendPreviewError,
     basePath,
   };
 }

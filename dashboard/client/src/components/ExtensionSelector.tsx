@@ -31,26 +31,42 @@ const EXTENSIONS: Extension[] = [
   {
     id: 'vibe',
     name: 'Vibe',
-    description: 'AI-powered coding for non-technical users with chat and live preview UI',
+    description: 'AI-powered coding with chat UI, live preview, and codebase-aware AI context',
     features: [
       'Chat-based AI interface',
+      'Codebase-aware AI context',
       'Live preview UI',
-      'Beginner-friendly workflow',
+      'Multi-file project support',
       'AWS Bedrock integration'
     ],
     credentialSupport: 'AWS credentials auto-configured via task role',
   },
   {
-    id: 'vibe-pro',
-    name: 'Vibe Pro',
-    description: 'Enhanced Vibe with codebase-aware AI for complex multi-file applications',
+    id: 'loclaude-lite',
+    name: 'Loclaude Lite',
+    description: 'Enhanced AI coding assistant with shell access and AST-based code understanding',
     features: [
-      'Codebase-aware AI context',
-      'Multi-file project support',
+      'Shell command execution (npm, git, tests)',
+      'AST-aware codebase understanding',
+      'Smart file search with glob and grep',
       'Live preview UI',
-      'Advanced AWS Bedrock integration'
+      'Auto-refreshing code context'
     ],
     credentialSupport: 'AWS credentials auto-configured via task role',
+  },
+  {
+    id: 'loclaude',
+    name: 'Loclaude',
+    description: 'Claude Code-style AI agent with sub-agents, extended thinking, and persistent shell',
+    features: [
+      'Claude Code-style tool design',
+      'Sub-agent spawning for parallel tasks',
+      'Extended thinking for complex reasoning',
+      'Persistent shell state across commands',
+      'Read-before-write safety enforcement'
+    ],
+    credentialSupport: 'AWS credentials auto-configured via task role',
+    recommended: true,
   },
 ]
 

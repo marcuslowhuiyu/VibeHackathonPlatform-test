@@ -349,26 +349,6 @@ jobs:
             echo "needs_tg_setup=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Ensure CI user has CloudFront permissions
-        continue-on-error: true
-        run: |
-          # Get the current IAM user name
-          CI_USER=$(aws sts get-caller-identity --query 'Arn' --output text | grep -oP '(?<=user/).*')
-          echo "CI user: $CI_USER"
-          aws iam put-user-policy --user-name "$CI_USER" --policy-name cloudfront-invalidation --policy-document '{
-            "Version": "2012-10-17",
-            "Statement": [{
-              "Effect": "Allow",
-              "Action": [
-                "cloudfront:CreateInvalidation",
-                "cloudfront:GetInvalidation",
-                "cloudfront:ListInvalidations"
-              ],
-              "Resource": "*"
-            }]
-          }'
-          echo "CloudFront invalidation permissions added to $CI_USER"
-
       - name: Ensure ecsTaskRole has dashboard permissions
         run: |
           # Ensure ecsTaskRole exists
@@ -1242,18 +1222,6 @@ jobs:
               --deployment-configuration "minimumHealthyPercent=0,maximumPercent=200" \
               --health-check-grace-period-seconds 120
           fi
-
-      - name: Invalidate CloudFront cache
-        if: steps.cloudfront.outputs.cloudfront_id != ''
-        continue-on-error: true
-        run: |
-          CF_ID="${{ steps.cloudfront.outputs.cloudfront_id }}"
-          echo "Invalidating CloudFront cache for distribution: $CF_ID"
-          aws cloudfront create-invalidation \
-            --distribution-id "$CF_ID" \
-            --paths "/*" \
-            --query 'Invalidation.Id' --output text
-          echo "Cache invalidation submitted"
 
       - name: Output URLs
         run: |

@@ -96,7 +96,7 @@ app.get('/api/project-files', async (_req, res) => {
 });
 
 app.get('/api/file/:filePath(*)', async (req, res) => {
-  const filePath = req.params.filePath;
+  const filePath = (req.params as Record<string, string>)['filePath(*)'] || (req.params as Record<string, string>).filePath;
 
   if (!isWithinRoot(filePath, PROJECT_ROOT)) {
     res.status(403).json({ error: 'Access denied: path is outside the project root' });

@@ -5,7 +5,7 @@ import { Plus, Loader2, Minus, AlertTriangle, CheckCircle, Package, Bot, Users }
 // AI EXTENSION CONFIGURATION
 // Add new AI extensions here to scale support
 // ==========================================
-type AIExtension = 'continue' | 'cline' | 'vibe' | 'loclaude-lite' | 'loclaude'
+type AIExtension = 'continue' | 'cline' | 'vibe' | 'loclaude-lite' | 'loclaude' | 'continue-dev'
 
 interface ExtensionConfig {
   name: string
@@ -49,6 +49,13 @@ const AI_EXTENSIONS: Record<AIExtension, ExtensionConfig> = {
     description: 'Claude Code-style AI with sub-agents, extended thinking, and persistent shell.',
     color: 'text-orange-400',
     bgColor: 'bg-orange-600',
+    enabled: true,
+  },
+  'continue-dev': {
+    name: 'Continue Dev',
+    description: 'Continue CLI-powered AI with codebase indexing, slash commands, and live preview.',
+    color: 'text-teal-400',
+    bgColor: 'bg-teal-600',
     enabled: true,
   },
 }

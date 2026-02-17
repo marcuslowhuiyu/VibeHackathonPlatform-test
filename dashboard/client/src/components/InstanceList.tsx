@@ -80,12 +80,14 @@ const EXTENSION_BADGES: Record<string, { label: string; color: string; bgColor: 
   vibe: { label: 'Vibe', color: 'text-pink-400', bgColor: 'bg-pink-900/50 border-pink-600' },
   'loclaude-lite': { label: 'Loclaude Lite', color: 'text-cyan-400', bgColor: 'bg-cyan-900/50 border-cyan-600' },
   loclaude: { label: 'Loclaude', color: 'text-orange-400', bgColor: 'bg-orange-900/50 border-orange-600' },
+  'continue-dev': { label: 'Continue Dev', color: 'text-teal-400', bgColor: 'bg-teal-900/50 border-teal-600' },
 }
 
 // Helper to determine studio label based on AI extension
 function getStudioLabel(aiExtension?: string): string {
   if (aiExtension === 'loclaude-lite' || aiExtension === 'loclaude') return 'Loclaude Studio'
   if (aiExtension === 'vibe') return 'Vibe Studio'
+  if (aiExtension === 'continue-dev') return 'Continue Dev Studio'
   return 'VS Code'
 }
 

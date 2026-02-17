@@ -68,6 +68,20 @@ const EXTENSIONS: Extension[] = [
     credentialSupport: 'AWS credentials auto-configured via task role',
     recommended: true,
   },
+  {
+    id: 'continue-dev',
+    name: 'Continue Dev',
+    description: 'Open-source Continue AI with custom chat UI, codebase indexing, and slash commands',
+    features: [
+      'Continue CLI-powered AI backend',
+      'Codebase indexing and context providers',
+      'Custom slash commands',
+      'Live preview UI',
+      'AWS Bedrock integration'
+    ],
+    credentialSupport: 'AWS credentials auto-configured via task role',
+    docsUrl: 'https://docs.continue.dev/cli/install'
+  },
 ]
 
 export default function ExtensionSelector() {

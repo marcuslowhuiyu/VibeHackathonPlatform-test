@@ -25,14 +25,13 @@ MODEL="${BEDROCK_MODEL_ID:-us.anthropic.claude-sonnet-4-20250514}"
 
 cat > /app/continue-config.yaml << CFGEOF
 name: Hackathon Assistant
-version: 0.0.1
+version: 1.0.0
 schema: v1
 models:
   - name: Claude Sonnet
     provider: bedrock
     model: $MODEL
-    env:
-      region: $REGION
+    region: $REGION
     roles:
       - chat
       - edit

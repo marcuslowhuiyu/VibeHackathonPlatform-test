@@ -153,7 +153,7 @@ export interface Instance {
   alb_access_path?: string;
 }
 
-export function createInstance(id: string, aiExtension?: 'continue' | 'cline' | 'vibe' | 'loclaude-lite' | 'loclaude'): Instance {
+export function createInstance(id: string, aiExtension?: 'continue' | 'cline' | 'vibe' | 'loclaude-lite' | 'loclaude' | 'continue-dev'): Instance {
   const db = loadDb();
   const instance: Instance = {
     id,

@@ -141,7 +141,7 @@ export interface Instance {
   notes?: string;
   // AI extension used for this instance
   // To add new extensions, update the type and validExtensions in instances.ts
-  ai_extension?: 'continue' | 'cline' | 'vibe' | 'loclaude-lite' | 'loclaude';
+  ai_extension?: 'continue' | 'cline' | 'vibe' | 'loclaude-lite' | 'loclaude' | 'continue-dev';
   // CloudFront fields for HTTPS access (legacy - per-instance CloudFront)
   cloudfront_distribution_id?: string;
   cloudfront_domain?: string;

@@ -145,6 +145,7 @@ export function useWebSocket(): {
             setIsThinking(false);
             setThinkingText('');
             setPrefillMessage('');
+            setCurrentFileChange(null);
             break;
         }
       };

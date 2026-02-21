@@ -153,6 +153,7 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
       // ---- reset_conversation --------------------------------------------
       if (parsed.type === 'reset_conversation') {
         agentLoop.clearHistory();
+        conversationHistory.length = 0;
         autoFixAttempts = 0;
         lastErrorTime = 0;
 

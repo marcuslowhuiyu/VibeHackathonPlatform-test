@@ -44,6 +44,7 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
     // Auto-fix state: prevent infinite error-fix loops
     let autoFixAttempts = 0;
     let lastErrorTime = 0;
+    let isProcessing = false;
 
     // ------------------------------------------------------------------
     // Wire agent events → WebSocket messages
@@ -98,17 +99,18 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
       // ---- chat message ------------------------------------------------
       if (parsed.type === 'chat' && typeof parsed.message === 'string') {
         const userMessage = parsed.message;
-        autoFixAttempts = 0; // Reset auto-fix counter on user message
-
-        // Track in per-connection history
+        autoFixAttempts = 0;
         conversationHistory.push({ role: 'user', content: userMessage });
 
+        isProcessing = true;
         try {
           await agentLoop.processMessage(userMessage);
           send(ws, { type: 'agent:done' });
         } catch (err: unknown) {
           const errorMessage = err instanceof Error ? err.message : String(err);
           send(ws, { type: 'error', message: errorMessage });
+        } finally {
+          isProcessing = false;
         }
 
         return;
@@ -137,12 +139,15 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
         const errorMessage = `The live preview has an error:\n\`\`\`\n${parsed.error}\n\`\`\`\nPlease investigate and fix this error.`;
         send(ws, { type: 'agent:text', content: `[Auto-detected error] ${parsed.error}\n\nAttempting to fix...` });
 
+        isProcessing = true;
         try {
           await agentLoop.processMessage(errorMessage);
           send(ws, { type: 'agent:done' });
         } catch (err: unknown) {
           const errMsg = err instanceof Error ? err.message : String(err);
           send(ws, { type: 'error', message: errMsg });
+        } finally {
+          isProcessing = false;
         }
         return;
       }
@@ -163,6 +168,15 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
         }
 
         send(ws, { type: 'conversation_reset' });
+        return;
+      }
+
+      // ---- cancel_response ------------------------------------------------
+      if (parsed.type === 'cancel_response') {
+        if (isProcessing) {
+          agentLoop.cancel();
+          send(ws, { type: 'agent:done', cancelled: true });
+        }
         return;
       }
     });

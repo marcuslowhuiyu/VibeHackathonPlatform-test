@@ -103,6 +103,7 @@ export class AgentLoop extends EventEmitter {
   private client: BedrockRuntimeClient;
   private conversationHistory: Message[] = [];
   private repoMap?: string;
+  private currentAbortController: AbortController | null = null;
 
   constructor(repoMap?: string) {
     super();
@@ -122,6 +123,14 @@ export class AgentLoop extends EventEmitter {
   /** Clear all conversation history to start a fresh conversation. */
   clearHistory(): void {
     this.conversationHistory = [];
+  }
+
+  /** Abort the currently running agent loop iteration. */
+  cancel(): void {
+    if (this.currentAbortController) {
+      this.currentAbortController.abort();
+      this.currentAbortController = null;
+    }
   }
 
   async processMessage(userMessage: string): Promise<void> {
@@ -147,6 +156,8 @@ export class AgentLoop extends EventEmitter {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       const systemPrompt = buildSystemPrompt(this.repoMap);
 
+      this.currentAbortController = new AbortController();
+
       const command = new ConverseStreamCommand({
         modelId: MODEL_ID,
         system: [{ text: systemPrompt }] as SystemContentBlock[],
@@ -157,7 +168,18 @@ export class AgentLoop extends EventEmitter {
       });
 
       // Collect the streamed response
-      const response = await this.client.send(command);
+      let response;
+      try {
+        response = await this.client.send(command, {
+          abortSignal: this.currentAbortController.signal,
+        });
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          this.currentAbortController = null;
+          return;
+        }
+        throw err;
+      }
 
       const assistantContent: ContentBlock[] = [];
       let stopReason: string | undefined;
@@ -226,6 +248,18 @@ export class AgentLoop extends EventEmitter {
             stopReason = event.messageStop.stopReason;
           }
         }
+      }
+
+      // Check if cancelled during streaming
+      if (this.currentAbortController?.signal.aborted) {
+        if (assistantContent.length > 0) {
+          this.conversationHistory.push({
+            role: "assistant",
+            content: assistantContent,
+          });
+        }
+        this.currentAbortController = null;
+        return;
       }
 
       // Append the full assistant message to conversation history
@@ -320,6 +354,7 @@ export class AgentLoop extends EventEmitter {
       }
 
       // Done
+      this.currentAbortController = null;
       return;
     }
 

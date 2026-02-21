@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { RotateCcw } from 'lucide-react';
 
 interface ToolCall {
   name: string;
@@ -19,6 +20,7 @@ interface ChatPanelProps {
   messages: Message[];
   prefillMessage: string;
   onSendMessage: (msg: string) => void;
+  onResetConversation: () => void;
   isThinking: boolean;
   thinkingText: string;
 }
@@ -173,7 +175,7 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
-export default function ChatPanel({ messages, prefillMessage, onSendMessage, isThinking, thinkingText }: ChatPanelProps) {
+export default function ChatPanel({ messages, prefillMessage, onSendMessage, onResetConversation, isThinking, thinkingText }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -208,8 +210,16 @@ export default function ChatPanel({ messages, prefillMessage, onSendMessage, isT
   return (
     <div className="h-full flex flex-col bg-gray-900">
       {/* Header */}
-      <div className="shrink-0 px-4 py-3 border-b border-gray-800">
+      <div className="shrink-0 px-4 py-3 border-b border-gray-800 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-gray-300">Chat</h2>
+        <button
+          onClick={onResetConversation}
+          disabled={isThinking}
+          title="New Conversation"
+          className="p-1.5 rounded-md text-gray-400 hover:text-gray-200 hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        >
+          <RotateCcw className="w-4 h-4" />
+        </button>
       </div>
 
       {/* Messages */}

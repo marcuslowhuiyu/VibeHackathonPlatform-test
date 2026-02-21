@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'http';
 import { AgentLoop } from './agent/agent-loop.js';
+import { generateRepoMap } from './agent/repo-map.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -143,6 +144,24 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
           const errMsg = err instanceof Error ? err.message : String(err);
           send(ws, { type: 'error', message: errMsg });
         }
+        return;
+      }
+
+      // ---- reset_conversation --------------------------------------------
+      if (parsed.type === 'reset_conversation') {
+        agentLoop.clearHistory();
+        autoFixAttempts = 0;
+        lastErrorTime = 0;
+
+        try {
+          const newMap = await generateRepoMap('/home/workspace/project');
+          agentLoop.updateRepoMap(newMap);
+          console.log('Conversation reset: history cleared, repo map regenerated');
+        } catch (err) {
+          console.warn('Conversation reset: history cleared, repo map failed:', err);
+        }
+
+        send(ws, { type: 'conversation_reset' });
         return;
       }
     });

@@ -122,6 +122,11 @@ export class AgentLoop extends EventEmitter {
     this.repoMap = newMap;
   }
 
+  /** Clear all conversation history to start a fresh conversation. */
+  clearHistory(): void {
+    this.conversationHistory = [];
+  }
+
   async processMessage(userMessage: string): Promise<void> {
     // Append the user message to conversation history
     this.conversationHistory.push({

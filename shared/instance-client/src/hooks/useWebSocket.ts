@@ -23,6 +23,7 @@ export function useWebSocket(): {
   sendElementClick: (info: { tagName: string; textContent: string; selector: string }) => void;
   sendPreviewError: (error: string) => void;
   resetConversation: () => void;
+  cancelResponse: () => void;
   basePath: string;
 } {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -205,6 +206,12 @@ export function useWebSocket(): {
     }
   }, []);
 
+  const cancelResponse = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'cancel_response' }));
+    }
+  }, []);
+
   return {
     messages,
     isThinking,
@@ -215,6 +222,7 @@ export function useWebSocket(): {
     sendElementClick,
     sendPreviewError,
     resetConversation,
+    cancelResponse,
     basePath,
   };
 }

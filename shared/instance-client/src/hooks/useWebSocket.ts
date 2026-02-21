@@ -22,6 +22,7 @@ export function useWebSocket(): {
   sendMessage: (text: string) => void;
   sendElementClick: (info: { tagName: string; textContent: string; selector: string }) => void;
   sendPreviewError: (error: string) => void;
+  resetConversation: () => void;
   basePath: string;
 } {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -138,6 +139,13 @@ export function useWebSocket(): {
               { role: 'assistant', content: `Error: ${data.message || 'Something went wrong'}`, isError: true },
             ]);
             break;
+
+          case 'conversation_reset':
+            setMessages([]);
+            setIsThinking(false);
+            setThinkingText('');
+            setPrefillMessage('');
+            break;
         }
       };
 
@@ -190,6 +198,12 @@ export function useWebSocket(): {
     }
   }, []);
 
+  const resetConversation = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'reset_conversation' }));
+    }
+  }, []);
+
   return {
     messages,
     isThinking,
@@ -199,6 +213,7 @@ export function useWebSocket(): {
     sendMessage,
     sendElementClick,
     sendPreviewError,
+    resetConversation,
     basePath,
   };
 }

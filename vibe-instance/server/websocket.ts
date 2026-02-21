@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'http';
+import fs from 'fs/promises';
 import { AgentLoop } from './agent/agent-loop.js';
 import { generateRepoMap } from './agent/repo-map.js';
 
@@ -37,6 +38,32 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
     });
   });
 
+  const HISTORY_FILE = '/home/workspace/.chat-history.json';
+
+  interface DisplayMessage {
+    role: 'user' | 'assistant';
+    content: string;
+    toolCalls?: { name: string; input: string; result: string }[];
+    isError?: boolean;
+  }
+
+  async function loadHistory(): Promise<DisplayMessage[]> {
+    try {
+      const data = await fs.readFile(HISTORY_FILE, 'utf-8');
+      return JSON.parse(data);
+    } catch {
+      return [];
+    }
+  }
+
+  async function saveHistory(messages: DisplayMessage[]): Promise<void> {
+    try {
+      await fs.writeFile(HISTORY_FILE, JSON.stringify(messages, null, 2));
+    } catch (err) {
+      console.warn('Failed to save chat history:', err);
+    }
+  }
+
   wss.on('connection', (ws: WebSocket) => {
     // Per-connection conversation history kept in memory
     const conversationHistory: Array<{ role: string; content: string }> = [];
@@ -45,6 +72,17 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
     let autoFixAttempts = 0;
     let lastErrorTime = 0;
     let isProcessing = false;
+
+    // Display messages for persistence (matches client Message format)
+    let displayMessages: DisplayMessage[] = [];
+
+    // Send saved history to client on connect
+    loadHistory().then((saved) => {
+      if (saved.length > 0) {
+        displayMessages = saved;
+        send(ws, { type: 'chat_history', messages: saved });
+      }
+    });
 
     // ------------------------------------------------------------------
     // Wire agent events → WebSocket messages
@@ -82,6 +120,44 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
     agentLoop.on('agent:file_changed', onFileChanged);
     agentLoop.on('agent:error', onError);
 
+    // Track display messages for persistence
+    const onTextForHistory = (data: { text: string }) => {
+      const last = displayMessages[displayMessages.length - 1];
+      if (last && last.role === 'assistant' && !last.isError) {
+        last.content += data.text;
+      } else {
+        displayMessages.push({ role: 'assistant', content: data.text });
+      }
+    };
+
+    const onToolCallForHistory = (data: { name: string; input: unknown }) => {
+      const last = displayMessages[displayMessages.length - 1];
+      if (last && last.role === 'assistant') {
+        if (!last.toolCalls) last.toolCalls = [];
+        last.toolCalls.push({
+          name: data.name,
+          input: typeof data.input === 'string' ? data.input : JSON.stringify(data.input),
+          result: '',
+        });
+      }
+    };
+
+    const onToolResultForHistory = (data: { name: string; result: unknown }) => {
+      const last = displayMessages[displayMessages.length - 1];
+      if (last && last.role === 'assistant' && last.toolCalls) {
+        for (let i = last.toolCalls.length - 1; i >= 0; i--) {
+          if (last.toolCalls[i].name === data.name && !last.toolCalls[i].result) {
+            last.toolCalls[i].result = typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
+            break;
+          }
+        }
+      }
+    };
+
+    agentLoop.on('agent:text', onTextForHistory);
+    agentLoop.on('agent:tool_call', onToolCallForHistory);
+    agentLoop.on('agent:tool_result', onToolResultForHistory);
+
     // ------------------------------------------------------------------
     // Handle incoming messages from the client
     // ------------------------------------------------------------------
@@ -101,11 +177,13 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
         const userMessage = parsed.message;
         autoFixAttempts = 0;
         conversationHistory.push({ role: 'user', content: userMessage });
+        displayMessages.push({ role: 'user', content: userMessage });
 
         isProcessing = true;
         try {
           await agentLoop.processMessage(userMessage);
           send(ws, { type: 'agent:done' });
+          saveHistory(displayMessages);
         } catch (err: unknown) {
           const errorMessage = err instanceof Error ? err.message : String(err);
           send(ws, { type: 'error', message: errorMessage });
@@ -146,6 +224,7 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
         try {
           await agentLoop.processMessage(errorMessage);
           send(ws, { type: 'agent:done' });
+          saveHistory(displayMessages);
         } catch (err: unknown) {
           const errMsg = err instanceof Error ? err.message : String(err);
           send(ws, { type: 'error', message: errMsg });
@@ -159,6 +238,8 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
       if (parsed.type === 'reset_conversation') {
         agentLoop.clearHistory();
         conversationHistory.length = 0;
+        displayMessages = [];
+        saveHistory([]);
         autoFixAttempts = 0;
         lastErrorTime = 0;
 
@@ -179,6 +260,7 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
         if (isProcessing) {
           agentLoop.cancel();
           send(ws, { type: 'agent:done', cancelled: true });
+          saveHistory(displayMessages);
         }
         return;
       }
@@ -195,6 +277,9 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
       agentLoop.off('agent:tool_result', onToolResult);
       agentLoop.off('agent:file_changed', onFileChanged);
       agentLoop.off('agent:error', onError);
+      agentLoop.off('agent:text', onTextForHistory);
+      agentLoop.off('agent:tool_call', onToolCallForHistory);
+      agentLoop.off('agent:tool_result', onToolResultForHistory);
     });
   });
 }

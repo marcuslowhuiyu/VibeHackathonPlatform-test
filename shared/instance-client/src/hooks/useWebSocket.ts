@@ -148,6 +148,12 @@ export function useWebSocket(): {
             setPrefillMessage('');
             setCurrentFileChange(null);
             break;
+
+          case 'chat_history':
+            if (Array.isArray(data.messages)) {
+              setMessages(data.messages);
+            }
+            break;
         }
       };
 

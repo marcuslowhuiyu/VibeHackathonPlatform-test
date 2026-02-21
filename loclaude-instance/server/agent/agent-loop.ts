@@ -106,6 +106,7 @@ export class AgentLoop extends EventEmitter {
   private client: BedrockRuntimeClient;
   private conversationHistory: Message[] = [];
   private repoMap?: string;
+  private currentAbortController: AbortController | null = null;
 
   constructor(repoMap?: string) {
     super();
@@ -125,6 +126,14 @@ export class AgentLoop extends EventEmitter {
   /** Clear all conversation history to start a fresh conversation. */
   clearHistory(): void {
     this.conversationHistory = [];
+  }
+
+  /** Abort the currently running agent loop iteration. */
+  cancel(): void {
+    if (this.currentAbortController) {
+      this.currentAbortController.abort();
+      this.currentAbortController = null;
+    }
   }
 
   async processMessage(userMessage: string): Promise<void> {
@@ -202,6 +211,8 @@ export class AgentLoop extends EventEmitter {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       const systemPrompt = buildSystemPrompt(this.repoMap);
 
+      this.currentAbortController = new AbortController();
+
       // Build the ConverseStream command.
       // Extended thinking is enabled by default but may be disabled as a fallback
       // if the conversation history triggers validation errors.
@@ -233,8 +244,15 @@ export class AgentLoop extends EventEmitter {
       // error, strip thinking blocks and retry without thinking for this iteration.
       let response;
       try {
-        response = await this.client.send(command);
+        response = await this.client.send(command, {
+          abortSignal: this.currentAbortController.signal,
+        });
       } catch (err: unknown) {
+        // Check for cancellation
+        if (err instanceof Error && err.name === 'AbortError') {
+          this.currentAbortController = null;
+          return;
+        }
         const errMsg = err instanceof Error ? err.message : String(err);
         if (!thinkingDisabled && errMsg.includes("thinking")) {
           // Thinking history is corrupted — retry without thinking
@@ -250,7 +268,9 @@ export class AgentLoop extends EventEmitter {
               tools: bedrockTools(),
             },
           });
-          response = await this.client.send(fallbackCommand);
+          response = await this.client.send(fallbackCommand, {
+            abortSignal: this.currentAbortController!.signal,
+          });
         } else {
           throw err;
         }
@@ -385,6 +405,18 @@ export class AgentLoop extends EventEmitter {
         }
       }
 
+      // Check if cancelled during streaming
+      if (this.currentAbortController?.signal.aborted) {
+        if (assistantContent.length > 0) {
+          this.conversationHistory.push({
+            role: "assistant",
+            content: assistantContent,
+          });
+        }
+        this.currentAbortController = null;
+        return;
+      }
+
       // Safety net: when thinking is enabled, ensure assistant content starts
       // with reasoningContent (required by the API). If the model somehow
       // didn't produce a thinking block, or the stream delivered blocks in
@@ -514,6 +546,7 @@ export class AgentLoop extends EventEmitter {
       }
 
       // Done
+      this.currentAbortController = null;
       return;
     }
 

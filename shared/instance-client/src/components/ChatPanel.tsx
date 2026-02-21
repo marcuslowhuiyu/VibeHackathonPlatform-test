@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { RotateCcw } from 'lucide-react';
+import { RotateCcw, Square } from 'lucide-react';
 
 interface ToolCall {
   name: string;
@@ -21,6 +21,7 @@ interface ChatPanelProps {
   prefillMessage: string;
   onSendMessage: (msg: string) => void;
   onResetConversation: () => void;
+  onCancelResponse: () => void;
   isThinking: boolean;
   thinkingText: string;
 }
@@ -175,7 +176,7 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
-export default function ChatPanel({ messages, prefillMessage, onSendMessage, onResetConversation, isThinking, thinkingText }: ChatPanelProps) {
+export default function ChatPanel({ messages, prefillMessage, onSendMessage, onResetConversation, onCancelResponse, isThinking, thinkingText }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -265,13 +266,23 @@ export default function ChatPanel({ messages, prefillMessage, onSendMessage, onR
             rows={2}
             className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 resize-none focus:outline-none focus:border-blue-500 transition-colors"
           />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || isThinking}
-            className="self-end px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            Send
-          </button>
+          {isThinking ? (
+            <button
+              onClick={onCancelResponse}
+              className="self-end px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-500 transition-colors flex items-center gap-1.5"
+            >
+              <Square className="w-3.5 h-3.5 fill-current" />
+              Stop
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={!input.trim()}
+              className="self-end px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Send
+            </button>
+          )}
         </div>
       </div>
     </div>

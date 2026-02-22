@@ -275,12 +275,13 @@ export class AgentLoop extends EventEmitter {
         }
         // Token limit error — force truncate and retry
         const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('too many tokens') || errMsg.includes('too long') || errMsg.includes('Input is too long')) {
+        const errLower = errMsg.toLowerCase();
+        if (errLower.includes('too many tokens') || errLower.includes('too long') || errLower.includes('input is too long') || errLower.includes('throttl')) {
           console.warn('Token limit hit, force-truncating history...');
           const keepCount = Math.max(4, Math.floor(this.conversationHistory.length * 0.3));
           this.conversationHistory = this.conversationHistory.slice(-keepCount);
           // If rate-limited (not just context overflow), wait before retrying
-          if (errMsg.toLowerCase().includes('wait') || errMsg.toLowerCase().includes('throttl')) {
+          if (errLower.includes('wait') || errLower.includes('throttl')) {
             const delaySec = 5 * (iteration + 1);
             console.warn(`Rate limited, waiting ${delaySec}s before retry...`);
             await new Promise((r) => setTimeout(r, delaySec * 1000));

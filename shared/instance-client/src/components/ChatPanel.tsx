@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { RotateCcw, Square } from 'lucide-react';
 
 interface ToolCall {
   name: string;
@@ -19,6 +20,8 @@ interface ChatPanelProps {
   messages: Message[];
   prefillMessage: string;
   onSendMessage: (msg: string) => void;
+  onResetConversation: () => void;
+  onCancelResponse: () => void;
   isThinking: boolean;
   thinkingText: string;
 }
@@ -173,7 +176,7 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
-export default function ChatPanel({ messages, prefillMessage, onSendMessage, isThinking, thinkingText }: ChatPanelProps) {
+export default function ChatPanel({ messages, prefillMessage, onSendMessage, onResetConversation, onCancelResponse, isThinking, thinkingText }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -208,8 +211,16 @@ export default function ChatPanel({ messages, prefillMessage, onSendMessage, isT
   return (
     <div className="h-full flex flex-col bg-gray-900">
       {/* Header */}
-      <div className="shrink-0 px-4 py-3 border-b border-gray-800">
+      <div className="shrink-0 px-4 py-3 border-b border-gray-800 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-gray-300">Chat</h2>
+        <button
+          onClick={onResetConversation}
+          disabled={isThinking}
+          title="New Conversation"
+          className="p-1.5 rounded-md text-gray-400 hover:text-gray-200 hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        >
+          <RotateCcw className="w-4 h-4" />
+        </button>
       </div>
 
       {/* Messages */}
@@ -255,13 +266,23 @@ export default function ChatPanel({ messages, prefillMessage, onSendMessage, isT
             rows={2}
             className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 resize-none focus:outline-none focus:border-blue-500 transition-colors"
           />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || isThinking}
-            className="self-end px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            Send
-          </button>
+          {isThinking ? (
+            <button
+              onClick={onCancelResponse}
+              className="self-end px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-500 transition-colors flex items-center gap-1.5"
+            >
+              <Square className="w-3.5 h-3.5 fill-current" />
+              Stop
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={!input.trim()}
+              className="self-end px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Send
+            </button>
+          )}
         </div>
       </div>
     </div>

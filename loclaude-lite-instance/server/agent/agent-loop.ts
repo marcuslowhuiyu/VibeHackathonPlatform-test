@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import {
   BedrockRuntimeClient,
+  ConverseCommand,
   ConverseStreamCommand,
   type ContentBlock,
   type Message,
@@ -25,6 +26,7 @@ function getDefaultModelId(): string {
 }
 const MODEL_ID = process.env.BEDROCK_MODEL_ID || getDefaultModelId();
 const MAX_ITERATIONS = 25; // safety limit to prevent infinite loops
+const TOKEN_THRESHOLD = 150_000;  // ~150K tokens — trigger summarization
 
 // ---------------------------------------------------------------------------
 // System prompts
@@ -103,6 +105,7 @@ export class AgentLoop extends EventEmitter {
   private client: BedrockRuntimeClient;
   private conversationHistory: Message[] = [];
   private repoMap?: string;
+  private currentAbortController: AbortController | null = null;
 
   constructor(repoMap?: string) {
     super();
@@ -117,6 +120,109 @@ export class AgentLoop extends EventEmitter {
   /** Update the repo map used in the system prompt. */
   updateRepoMap(newMap: string): void {
     this.repoMap = newMap;
+  }
+
+  /** Clear all conversation history to start a fresh conversation. */
+  clearHistory(): void {
+    this.conversationHistory = [];
+  }
+
+  /** Abort the currently running agent loop iteration. */
+  cancel(): void {
+    if (this.currentAbortController) {
+      this.currentAbortController.abort();
+      this.currentAbortController = null;
+    }
+  }
+
+  /** Estimate total tokens in conversation history using ~4 chars/token heuristic. */
+  private estimateTokens(): number {
+    let chars = 0;
+    for (const msg of this.conversationHistory) {
+      if (!msg.content) continue;
+      for (const block of msg.content as ContentBlock[]) {
+        if (block.text) chars += block.text.length;
+        if (block.toolUse) {
+          chars += (block.toolUse.name?.length || 0);
+          chars += JSON.stringify(block.toolUse.input || {}).length;
+        }
+        if (block.toolResult?.content) {
+          for (const c of block.toolResult.content) {
+            if ('text' in c && c.text) chars += c.text.length;
+          }
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rc = (block as any)?.reasoningContent;
+        if (rc?.reasoningText?.text) chars += rc.reasoningText.text.length;
+      }
+    }
+    return Math.ceil(chars / 4);
+  }
+
+  /** Extract plain text from a conversation message for summarization. */
+  private extractMessageText(msg: Message): string {
+    if (!msg.content) return '';
+    const parts: string[] = [];
+    for (const block of msg.content as ContentBlock[]) {
+      if (block.text) parts.push(block.text);
+      if (block.toolUse) {
+        parts.push(`[Tool: ${block.toolUse.name}]`);
+      }
+      if (block.toolResult?.content) {
+        for (const c of block.toolResult.content) {
+          if ('text' in c && c.text) {
+            parts.push(c.text.length > 500 ? c.text.slice(0, 500) + '...' : c.text);
+          }
+        }
+      }
+    }
+    return `${msg.role}: ${parts.join(' ')}`;
+  }
+
+  /** Compact conversation history if it exceeds the token threshold. */
+  private async compactHistory(): Promise<void> {
+    const estimated = this.estimateTokens();
+    if (estimated < TOKEN_THRESHOLD) return;
+
+    console.log(`Token estimate: ~${estimated}. Threshold: ${TOKEN_THRESHOLD}. Compacting...`);
+
+    // Take the oldest 60% of messages for summarization
+    const splitIndex = Math.max(2, Math.floor(this.conversationHistory.length * 0.6));
+    const oldMessages = this.conversationHistory.slice(0, splitIndex);
+    const recentMessages = this.conversationHistory.slice(splitIndex);
+
+    // Build text summary of old messages
+    const oldText = oldMessages.map((m) => this.extractMessageText(m)).join('\n');
+
+    try {
+      const summaryCommand = new ConverseCommand({
+        modelId: MODEL_ID,
+        messages: [{
+          role: 'user',
+          content: [{ text: `Summarize this conversation concisely in 2-3 paragraphs. Preserve: key decisions made, files created/modified, current task context, and any unfinished work.\n\n${oldText.slice(0, 50000)}` }],
+        }],
+        inferenceConfig: { maxTokens: 1024 },
+      });
+
+      const summaryResponse = await this.client.send(summaryCommand);
+      const summaryText = summaryResponse.output?.message?.content?.[0]?.text || '';
+
+      if (summaryText) {
+        this.conversationHistory = [
+          { role: 'user', content: [{ text: `[Previous conversation summary]\n${summaryText}` }] },
+          { role: 'assistant', content: [{ text: 'Understood. I have the context from our previous conversation and will continue from here.' }] },
+          ...recentMessages,
+        ];
+        console.log(`History compacted: ${oldMessages.length + recentMessages.length} messages → ${this.conversationHistory.length} messages`);
+        return;
+      }
+    } catch (err) {
+      console.warn('Summarization failed, falling back to truncation:', err);
+    }
+
+    // Fallback: simple truncation — keep only recent messages
+    this.conversationHistory = recentMessages;
+    console.log(`History truncated: kept ${recentMessages.length} most recent messages`);
   }
 
   async processMessage(userMessage: string): Promise<void> {
@@ -140,7 +246,12 @@ export class AgentLoop extends EventEmitter {
 
   private async runLoop(): Promise<void> {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+      // Check if conversation is getting too long and compact if needed
+      await this.compactHistory();
+
       const systemPrompt = buildSystemPrompt(this.repoMap);
+
+      this.currentAbortController = new AbortController();
 
       const command = new ConverseStreamCommand({
         modelId: MODEL_ID,
@@ -152,7 +263,32 @@ export class AgentLoop extends EventEmitter {
       });
 
       // Collect the streamed response
-      const response = await this.client.send(command);
+      let response;
+      try {
+        response = await this.client.send(command, {
+          abortSignal: this.currentAbortController.signal,
+        });
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          this.currentAbortController = null;
+          return;
+        }
+        // Token limit error — force truncate and retry
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('too many tokens') || errMsg.includes('too long') || errMsg.includes('Input is too long')) {
+          console.warn('Token limit hit, force-truncating history...');
+          const keepCount = Math.max(4, Math.floor(this.conversationHistory.length * 0.3));
+          this.conversationHistory = this.conversationHistory.slice(-keepCount);
+          // If rate-limited (not just context overflow), wait before retrying
+          if (errMsg.toLowerCase().includes('wait') || errMsg.toLowerCase().includes('throttl')) {
+            const delaySec = 5 * (iteration + 1);
+            console.warn(`Rate limited, waiting ${delaySec}s before retry...`);
+            await new Promise((r) => setTimeout(r, delaySec * 1000));
+          }
+          continue;
+        }
+        throw err;
+      }
 
       const assistantContent: ContentBlock[] = [];
       let stopReason: string | undefined;
@@ -221,6 +357,18 @@ export class AgentLoop extends EventEmitter {
             stopReason = event.messageStop.stopReason;
           }
         }
+      }
+
+      // Check if cancelled during streaming
+      if (this.currentAbortController?.signal.aborted) {
+        if (assistantContent.length > 0) {
+          this.conversationHistory.push({
+            role: "assistant",
+            content: assistantContent,
+          });
+        }
+        this.currentAbortController = null;
+        return;
       }
 
       // Append the full assistant message to conversation history
@@ -315,6 +463,7 @@ export class AgentLoop extends EventEmitter {
       }
 
       // Done
+      this.currentAbortController = null;
       return;
     }
 

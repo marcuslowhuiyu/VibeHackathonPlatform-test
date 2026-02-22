@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { spawn } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import { readFileSync } from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
@@ -13,6 +13,20 @@ const CONFIG_PATH = '/app/continue-config.yaml';
  */
 export class ContinueBridge extends EventEmitter {
   private sessionId: string | null = null;
+  private currentProcess: ChildProcess | null = null;
+
+  /** Abort the currently running CLI process. */
+  cancel(): void {
+    if (this.currentProcess) {
+      this.currentProcess.kill('SIGTERM');
+      this.currentProcess = null;
+    }
+  }
+
+  /** Clear session state to start a fresh conversation. */
+  clearHistory(): void {
+    this.sessionId = null;
+  }
 
   async processMessage(userMessage: string): Promise<void> {
     this.emit('agent:thinking', { text: 'Processing with Continue...' });
@@ -20,7 +34,7 @@ export class ContinueBridge extends EventEmitter {
     const beforeSnapshot = await this.snapshotFiles();
 
     try {
-      const response = await this.runCli(userMessage);
+      const response = await this.runCliWithRetry(userMessage);
 
       if (response) {
         this.emit('agent:text', { text: response });
@@ -41,6 +55,28 @@ export class ContinueBridge extends EventEmitter {
     }
   }
 
+  private async runCliWithRetry(prompt: string, maxRetries = 3): Promise<string> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await this.runCli(prompt);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const isTokenError = msg.includes('Too many tokens') || msg.includes('too many tokens') || msg.includes('throttl');
+
+        if (isTokenError && attempt < maxRetries) {
+          // Reset session to clear context on token limit errors
+          this.sessionId = null;
+          const waitSec = 2 ** attempt * 5; // 5s, 10s, 20s
+          this.emit('agent:thinking', { text: `Rate limited, retrying in ${waitSec}s (attempt ${attempt + 2}/${maxRetries + 1})...` });
+          await new Promise((r) => setTimeout(r, waitSec * 1000));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error('Max retries exceeded');
+  }
+
   private runCli(prompt: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const args = ['-p', prompt, '--config', CONFIG_PATH];
@@ -59,6 +95,8 @@ export class ContinueBridge extends EventEmitter {
         stdio: ['pipe', 'pipe', 'pipe'],
       });
 
+      this.currentProcess = proc;
+
       let stdout = '';
       let stderr = '';
 
@@ -70,7 +108,15 @@ export class ContinueBridge extends EventEmitter {
         stderr += chunk.toString();
       });
 
-      proc.on('close', (code) => {
+      proc.on('close', (code, signal) => {
+        this.currentProcess = null;
+
+        // If killed by cancel(), resolve with empty string
+        if (signal === 'SIGTERM') {
+          resolve(stdout.trim() || '');
+          return;
+        }
+
         if (code !== 0 && !stdout) {
           reject(new Error(`Continue CLI exited with code ${code}: ${stderr}`));
           return;
@@ -88,6 +134,7 @@ export class ContinueBridge extends EventEmitter {
       });
 
       proc.on('error', (err) => {
+        this.currentProcess = null;
         reject(new Error(`Failed to spawn Continue CLI: ${err.message}`));
       });
 

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { spawn } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import { readFileSync } from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
@@ -13,6 +13,20 @@ const CONFIG_PATH = '/app/continue-config.yaml';
  */
 export class ContinueBridge extends EventEmitter {
   private sessionId: string | null = null;
+  private currentProcess: ChildProcess | null = null;
+
+  /** Abort the currently running CLI process. */
+  cancel(): void {
+    if (this.currentProcess) {
+      this.currentProcess.kill('SIGTERM');
+      this.currentProcess = null;
+    }
+  }
+
+  /** Clear session state to start a fresh conversation. */
+  clearHistory(): void {
+    this.sessionId = null;
+  }
 
   async processMessage(userMessage: string): Promise<void> {
     this.emit('agent:thinking', { text: 'Processing with Continue...' });
@@ -59,6 +73,8 @@ export class ContinueBridge extends EventEmitter {
         stdio: ['pipe', 'pipe', 'pipe'],
       });
 
+      this.currentProcess = proc;
+
       let stdout = '';
       let stderr = '';
 
@@ -70,7 +86,15 @@ export class ContinueBridge extends EventEmitter {
         stderr += chunk.toString();
       });
 
-      proc.on('close', (code) => {
+      proc.on('close', (code, signal) => {
+        this.currentProcess = null;
+
+        // If killed by cancel(), resolve with empty string
+        if (signal === 'SIGTERM') {
+          resolve(stdout.trim() || '');
+          return;
+        }
+
         if (code !== 0 && !stdout) {
           reject(new Error(`Continue CLI exited with code ${code}: ${stderr}`));
           return;
@@ -88,6 +112,7 @@ export class ContinueBridge extends EventEmitter {
       });
 
       proc.on('error', (err) => {
+        this.currentProcess = null;
         reject(new Error(`Failed to spawn Continue CLI: ${err.message}`));
       });
 

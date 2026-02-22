@@ -279,6 +279,12 @@ export class AgentLoop extends EventEmitter {
           console.warn('Token limit hit, force-truncating history...');
           const keepCount = Math.max(4, Math.floor(this.conversationHistory.length * 0.3));
           this.conversationHistory = this.conversationHistory.slice(-keepCount);
+          // If rate-limited (not just context overflow), wait before retrying
+          if (errMsg.toLowerCase().includes('wait') || errMsg.toLowerCase().includes('throttl')) {
+            const delaySec = 5 * (iteration + 1);
+            console.warn(`Rate limited, waiting ${delaySec}s before retry...`);
+            await new Promise((r) => setTimeout(r, delaySec * 1000));
+          }
           continue;
         }
         throw err;

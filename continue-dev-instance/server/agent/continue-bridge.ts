@@ -34,7 +34,7 @@ export class ContinueBridge extends EventEmitter {
     const beforeSnapshot = await this.snapshotFiles();
 
     try {
-      const response = await this.runCli(userMessage);
+      const response = await this.runCliWithRetry(userMessage);
 
       if (response) {
         this.emit('agent:text', { text: response });
@@ -53,6 +53,28 @@ export class ContinueBridge extends EventEmitter {
       const message = err instanceof Error ? err.message : String(err);
       this.emit('agent:error', { error: message });
     }
+  }
+
+  private async runCliWithRetry(prompt: string, maxRetries = 3): Promise<string> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await this.runCli(prompt);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const isTokenError = msg.includes('Too many tokens') || msg.includes('too many tokens') || msg.includes('throttl');
+
+        if (isTokenError && attempt < maxRetries) {
+          // Reset session to clear context on token limit errors
+          this.sessionId = null;
+          const waitSec = 2 ** attempt * 5; // 5s, 10s, 20s
+          this.emit('agent:thinking', { text: `Rate limited, retrying in ${waitSec}s (attempt ${attempt + 2}/${maxRetries + 1})...` });
+          await new Promise((r) => setTimeout(r, waitSec * 1000));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error('Max retries exceeded');
   }
 
   private runCli(prompt: string): Promise<string> {

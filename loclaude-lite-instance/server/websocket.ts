@@ -97,11 +97,11 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
     };
 
     const onToolCall = (data: { name: string; input: unknown }) => {
-      send(ws, { type: 'agent:tool_call', tool: data.name, input: data.input });
+      send(ws, { type: 'agent:tool_call', name: data.name, input: data.input });
     };
 
     const onToolResult = (data: { name: string; result: unknown }) => {
-      send(ws, { type: 'agent:tool_result', tool: data.name, result: data.result });
+      send(ws, { type: 'agent:tool_result', name: data.name, result: data.result });
     };
 
     const onFileChanged = (data: { path: string; content?: string }) => {
@@ -174,6 +174,10 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
 
       // ---- chat message ------------------------------------------------
       if (parsed.type === 'chat' && typeof parsed.message === 'string') {
+        if (isProcessing) {
+          send(ws, { type: 'error', message: 'Still processing previous message' });
+          return;
+        }
         const userMessage = parsed.message;
         autoFixAttempts = 0;
         conversationHistory.push({ role: 'user', content: userMessage });
@@ -256,8 +260,7 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
       if (parsed.type === 'cancel_response') {
         if (isProcessing) {
           agentLoop.cancel();
-          send(ws, { type: 'agent:done', cancelled: true });
-          saveHistory(displayMessages);
+          // The chat/preview_error handler will send agent:done after processMessage resolves
         }
         return;
       }

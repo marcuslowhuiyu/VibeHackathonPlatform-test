@@ -27,7 +27,6 @@ function getDefaultModelId(): string {
 const MODEL_ID = process.env.BEDROCK_MODEL_ID || getDefaultModelId();
 const MAX_ITERATIONS = 30; // slightly higher than vibe's 25 — Claude Code tasks tend to be more complex
 const TOKEN_THRESHOLD = 150_000;  // ~150K tokens — trigger summarization
-const TOKEN_HARD_CAP = 100_000;   // ~100K tokens — force truncation fallback
 
 // ---------------------------------------------------------------------------
 // System prompt (Claude Code-style)

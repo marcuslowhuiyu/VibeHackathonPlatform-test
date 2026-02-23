@@ -63,7 +63,8 @@ export function useWebSocket(): {
             break;
 
           case 'agent:text':
-            // Clear thinking text when actual response starts
+            // Response arrived — clear thinking state
+            setIsThinking(false);
             setThinkingText('');
             setMessages((prev) => {
               const updated = [...prev];

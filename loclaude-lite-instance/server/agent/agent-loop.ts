@@ -135,6 +135,45 @@ export class AgentLoop extends EventEmitter {
     }
   }
 
+  /**
+   * Ensure conversation history doesn't start mid-tool-exchange.
+   * Bedrock requires every tool_use to have a matching toolResult in the next
+   * user message. After truncation we might slice right between them.
+   */
+  private sanitizeHistory(): void {
+    const h = this.conversationHistory;
+    if (h.length === 0) return;
+
+    // If the first message is a user message containing only toolResult blocks,
+    // drop it (the assistant tool_use it responds to was truncated).
+    while (h.length > 0 && h[0].role === 'user') {
+      const blocks = (h[0].content ?? []) as ContentBlock[];
+      const allToolResults = blocks.length > 0 && blocks.every((b) => b.toolResult !== undefined);
+      if (allToolResults) {
+        h.shift();
+      } else {
+        break;
+      }
+    }
+
+    // If the last message is an assistant with tool_use blocks (no following toolResult),
+    // drop it to avoid the "Expected toolResult" error.
+    while (h.length > 0 && h[h.length - 1].role === 'assistant') {
+      const blocks = (h[h.length - 1].content ?? []) as ContentBlock[];
+      const hasToolUse = blocks.some((b) => b.toolUse !== undefined);
+      if (hasToolUse) {
+        h.pop();
+      } else {
+        break;
+      }
+    }
+
+    // Bedrock requires conversation to start with a user message
+    if (h.length > 0 && h[0].role === 'assistant') {
+      h.unshift({ role: 'user', content: [{ text: '[Conversation resumed]' }] });
+    }
+  }
+
   /** Estimate total tokens in conversation history using ~4 chars/token heuristic. */
   private estimateTokens(): number {
     let chars = 0;
@@ -213,6 +252,7 @@ export class AgentLoop extends EventEmitter {
           { role: 'assistant', content: [{ text: 'Understood. I have the context from our previous conversation and will continue from here.' }] },
           ...recentMessages,
         ];
+        this.sanitizeHistory();
         console.log(`History compacted: ${oldMessages.length + recentMessages.length} messages → ${this.conversationHistory.length} messages`);
         return;
       }
@@ -222,6 +262,7 @@ export class AgentLoop extends EventEmitter {
 
     // Fallback: simple truncation — keep only recent messages
     this.conversationHistory = recentMessages;
+    this.sanitizeHistory();
     console.log(`History truncated: kept ${recentMessages.length} most recent messages`);
   }
 
@@ -280,6 +321,7 @@ export class AgentLoop extends EventEmitter {
           console.warn('Token limit hit, force-truncating history...');
           const keepCount = Math.max(4, Math.floor(this.conversationHistory.length * 0.3));
           this.conversationHistory = this.conversationHistory.slice(-keepCount);
+          this.sanitizeHistory();
           // If rate-limited (not just context overflow), wait before retrying
           if (errLower.includes('wait') || errLower.includes('throttl')) {
             const delaySec = 5 * (iteration + 1);

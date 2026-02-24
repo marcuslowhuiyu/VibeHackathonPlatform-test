@@ -11,7 +11,7 @@ interface FileEntry {
 }
 
 export default function App() {
-  const { messages, isThinking, thinkingText, prefillMessage, currentFileChange, sendMessage, sendElementClick, sendPreviewError, basePath, resetConversation, cancelResponse } =
+  const { messages, isThinking, thinkingText, prefillMessage, currentFileChange, sendMessage, sendElementClick, sendPreviewError, basePath, resetConversation, cancelResponse, isConnected, toasts, dismissToast } =
     useWebSocket();
 
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -130,6 +130,9 @@ export default function App() {
           thinkingText={thinkingText}
           onResetConversation={resetConversation}
           onCancelResponse={cancelResponse}
+          isConnected={isConnected}
+          toasts={toasts}
+          dismissToast={dismissToast}
         />
       }
       previewPanel={previewPanel}

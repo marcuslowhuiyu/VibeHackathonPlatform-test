@@ -1,17 +1,10 @@
 import { useState, useEffect, useCallback, useRef, ReactNode } from 'react';
-
-type LayoutMode = 'full' | 'panel' | 'tabs';
+import { Code2 } from 'lucide-react';
 
 interface LayoutManagerProps {
   chatPanel: ReactNode;
   previewPanel: ReactNode;
   codePanel: ReactNode;
-}
-
-function getAutoMode(width: number): LayoutMode {
-  if (width > 1200) return 'full';
-  if (width >= 768) return 'panel';
-  return 'tabs';
 }
 
 function DragHandle({ onDrag }: { onDrag: (deltaX: number) => void }) {
@@ -24,8 +17,6 @@ function DragHandle({ onDrag }: { onDrag: (deltaX: number) => void }) {
     e.stopPropagation();
     startX.current = e.clientX;
     hasMoved.current = false;
-
-    // Capture pointer for reliable tracking even outside the element
     handleRef.current?.setPointerCapture(e.pointerId);
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
@@ -34,7 +25,6 @@ function DragHandle({ onDrag }: { onDrag: (deltaX: number) => void }) {
   const onPointerMove = useCallback((e: React.PointerEvent) => {
     if (!handleRef.current?.hasPointerCapture(e.pointerId)) return;
     const delta = e.clientX - startX.current;
-    // Minimum 2px threshold to prevent accidental micro-shifts on click
     if (!hasMoved.current && Math.abs(delta) < 2) return;
     hasMoved.current = true;
     startX.current = e.clientX;
@@ -63,15 +53,13 @@ function DragHandle({ onDrag }: { onDrag: (deltaX: number) => void }) {
 
 export default function LayoutManager({ chatPanel, previewPanel, codePanel }: LayoutManagerProps) {
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
-  const [manualMode, setManualMode] = useState<LayoutMode | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState<'chat' | 'preview' | 'code'>('preview');
-  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [codeOpen, setCodeOpen] = useState(() => {
+    try { return localStorage.getItem('codePanel') === 'open'; } catch { return false; }
+  });
+  const [activeTab, setActiveTab] = useState<'chat' | 'preview' | 'code'>('chat');
 
-  // Column widths as percentages [chat, preview, code]
-  const [colWidths, setColWidths] = useState<[number, number, number]>([25, 50, 25]);
-  // Panel mode split as percentage for left panel
-  const [panelSplit, setPanelSplit] = useState(70);
+  const [twoColWidths, setTwoColWidths] = useState<[number, number]>([30, 70]);
+  const [threeColWidths, setThreeColWidths] = useState<[number, number, number]>([25, 50, 25]);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -81,172 +69,109 @@ export default function LayoutManager({ chatPanel, previewPanel, codePanel }: La
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const autoMode = getAutoMode(windowWidth);
-  const mode = manualMode ?? autoMode;
+  useEffect(() => {
+    try { localStorage.setItem('codePanel', codeOpen ? 'open' : 'closed'); } catch {}
+  }, [codeOpen]);
 
-  // Drag handler for the divider between chat and preview (index 0)
-  const handleDragLeft = useCallback((deltaX: number) => {
+  const isMobile = windowWidth < 768;
+
+  const handleDrag2Col = useCallback((deltaX: number) => {
     if (!containerRef.current) return;
-    const totalWidth = containerRef.current.offsetWidth;
-    const deltaPct = (deltaX / totalWidth) * 100;
-    setColWidths(prev => {
-      const newChat = Math.max(10, Math.min(60, prev[0] + deltaPct));
-      const newPreview = Math.max(10, Math.min(80, prev[1] - deltaPct));
-      return [newChat, newPreview, prev[2]];
-    });
+    const pct = (deltaX / containerRef.current.offsetWidth) * 100;
+    setTwoColWidths(prev => [
+      Math.max(15, Math.min(50, prev[0] + pct)),
+      Math.max(30, Math.min(85, prev[1] - pct)),
+    ]);
   }, []);
 
-  // Drag handler for the divider between preview and code (index 1)
-  const handleDragRight = useCallback((deltaX: number) => {
+  const handleDrag3Left = useCallback((deltaX: number) => {
     if (!containerRef.current) return;
-    const totalWidth = containerRef.current.offsetWidth;
-    const deltaPct = (deltaX / totalWidth) * 100;
-    setColWidths(prev => {
-      const newPreview = Math.max(10, Math.min(80, prev[1] + deltaPct));
-      const newCode = Math.max(10, Math.min(60, prev[2] - deltaPct));
-      return [prev[0], newPreview, newCode];
-    });
+    const pct = (deltaX / containerRef.current.offsetWidth) * 100;
+    setThreeColWidths(prev => [
+      Math.max(10, Math.min(40, prev[0] + pct)),
+      Math.max(20, Math.min(70, prev[1] - pct)),
+      prev[2],
+    ]);
   }, []);
 
-  // Drag handler for the panel mode divider
-  const handleDragPanel = useCallback((deltaX: number) => {
+  const handleDrag3Right = useCallback((deltaX: number) => {
     if (!containerRef.current) return;
-    const totalWidth = containerRef.current.offsetWidth;
-    const deltaPct = (deltaX / totalWidth) * 100;
-    setPanelSplit(prev => Math.max(30, Math.min(85, prev + deltaPct)));
+    const pct = (deltaX / containerRef.current.offsetWidth) * 100;
+    setThreeColWidths(prev => [
+      prev[0],
+      Math.max(20, Math.min(70, prev[1] + pct)),
+      Math.max(10, Math.min(40, prev[2] - pct)),
+    ]);
   }, []);
 
-  const modeLabels: Record<LayoutMode, string> = {
-    full: 'Full (3-col)',
-    panel: 'Panel (2-col)',
-    tabs: 'Tabs',
-  };
+  const codeToggle = !isMobile && (
+    <button
+      onClick={() => setCodeOpen(prev => !prev)}
+      className={`fixed top-2 right-2 z-50 p-2 rounded-md border transition-colors ${
+        codeOpen
+          ? 'bg-blue-600 border-blue-500 text-white'
+          : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200 hover:bg-gray-700'
+      }`}
+      title={codeOpen ? 'Hide code panel' : 'Show code panel'}
+    >
+      <Code2 className="w-4 h-4" />
+    </button>
+  );
 
-  const layoutToggle = (
-    <div className="fixed top-2 right-2 z-50">
-      <button
-        onClick={() => setDropdownOpen(!dropdownOpen)}
-        className="px-3 py-1.5 text-xs font-medium bg-gray-800 border border-gray-700 text-gray-300 rounded hover:bg-gray-700 transition-colors"
-      >
-        {modeLabels[mode]} {manualMode ? '(manual)' : '(auto)'}
-      </button>
-      {dropdownOpen && (
-        <div className="absolute right-0 mt-1 bg-gray-800 border border-gray-700 rounded shadow-lg overflow-hidden">
-          <button
-            onClick={() => { setManualMode(null); setDropdownOpen(false); }}
-            className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-700 ${
-              manualMode === null ? 'text-blue-400' : 'text-gray-300'
-            }`}
-          >
-            Auto ({modeLabels[autoMode]})
-          </button>
-          {(['full', 'panel', 'tabs'] as LayoutMode[]).map((m) => (
+  if (isMobile) {
+    const tabs = [
+      { key: 'chat' as const, label: 'Chat' },
+      { key: 'preview' as const, label: 'Preview' },
+      { key: 'code' as const, label: 'Code' },
+    ];
+    return (
+      <div className="h-screen w-screen bg-gray-900 text-white flex flex-col">
+        <div className="flex border-b border-gray-800 shrink-0">
+          {tabs.map((tab) => (
             <button
-              key={m}
-              onClick={() => { setManualMode(m); setDropdownOpen(false); }}
-              className={`block w-full text-left px-4 py-2 text-xs hover:bg-gray-700 ${
-                manualMode === m ? 'text-blue-400' : 'text-gray-300'
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
+                activeTab === tab.key
+                  ? 'text-blue-400 border-b-2 border-blue-400 bg-gray-800/50'
+                  : 'text-gray-400 hover:text-gray-300'
               }`}
             >
-              {modeLabels[m]}
+              {tab.label}
             </button>
           ))}
         </div>
-      )}
-    </div>
-  );
-
-  if (mode === 'full') {
-    return (
-      <div ref={containerRef} className="h-screen w-screen bg-gray-900 text-white">
-        {layoutToggle}
-        <div className="h-full flex">
-          <div className="h-full overflow-hidden" style={{ width: `${colWidths[0]}%` }}>{chatPanel}</div>
-          <DragHandle onDrag={handleDragLeft} />
-          <div className="h-full overflow-hidden" style={{ width: `${colWidths[1]}%` }}>{previewPanel}</div>
-          <DragHandle onDrag={handleDragRight} />
-          <div className="h-full overflow-hidden" style={{ width: `${colWidths[2]}%` }}>{codePanel}</div>
+        <div className="flex-1 overflow-hidden">
+          {activeTab === 'chat' && chatPanel}
+          {activeTab === 'preview' && previewPanel}
+          {activeTab === 'code' && codePanel}
         </div>
       </div>
     );
   }
 
-  if (mode === 'panel') {
+  if (codeOpen) {
     return (
       <div ref={containerRef} className="h-screen w-screen bg-gray-900 text-white">
-        {layoutToggle}
+        {codeToggle}
         <div className="h-full flex">
-          <div className="h-full overflow-hidden" style={{ width: sidebarOpen ? `${panelSplit}%` : '100%' }}>
-            {previewPanel}
-          </div>
-          {sidebarOpen && (
-            <>
-              <DragHandle onDrag={handleDragPanel} />
-              <div className="h-full overflow-hidden flex flex-col" style={{ width: `${100 - panelSplit}%` }}>
-                <div className="flex border-b border-gray-800">
-                  <button
-                    onClick={() => setActiveTab('chat')}
-                    className={`flex-1 px-3 py-2 text-xs font-medium ${
-                      activeTab === 'chat' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400'
-                    }`}
-                  >
-                    Chat
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('code')}
-                    className={`flex-1 px-3 py-2 text-xs font-medium ${
-                      activeTab === 'code' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400'
-                    }`}
-                  >
-                    Code
-                  </button>
-                </div>
-                <div className="flex-1 overflow-hidden">
-                  {activeTab === 'chat' ? chatPanel : codePanel}
-                </div>
-              </div>
-            </>
-          )}
+          <div className="h-full overflow-hidden" style={{ width: `${threeColWidths[0]}%` }}>{chatPanel}</div>
+          <DragHandle onDrag={handleDrag3Left} />
+          <div className="h-full overflow-hidden" style={{ width: `${threeColWidths[1]}%` }}>{previewPanel}</div>
+          <DragHandle onDrag={handleDrag3Right} />
+          <div className="h-full overflow-hidden" style={{ width: `${threeColWidths[2]}%` }}>{codePanel}</div>
         </div>
-        <button
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-          className="fixed bottom-4 right-4 z-50 px-3 py-1.5 text-xs font-medium bg-gray-800 border border-gray-700 text-gray-300 rounded hover:bg-gray-700"
-        >
-          {sidebarOpen ? 'Hide Sidebar' : 'Show Sidebar'}
-        </button>
       </div>
     );
   }
-
-  // tabs mode
-  const tabs = [
-    { key: 'chat' as const, label: 'Chat' },
-    { key: 'preview' as const, label: 'Preview' },
-    { key: 'code' as const, label: 'Code' },
-  ];
 
   return (
-    <div className="h-screen w-screen bg-gray-900 text-white flex flex-col">
-      {layoutToggle}
-      <div className="flex border-b border-gray-800 shrink-0">
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
-              activeTab === tab.key
-                ? 'text-blue-400 border-b-2 border-blue-400 bg-gray-800/50'
-                : 'text-gray-400 hover:text-gray-300'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-      <div className="flex-1 overflow-hidden">
-        {activeTab === 'chat' && chatPanel}
-        {activeTab === 'preview' && previewPanel}
-        {activeTab === 'code' && codePanel}
+    <div ref={containerRef} className="h-screen w-screen bg-gray-900 text-white">
+      {codeToggle}
+      <div className="h-full flex">
+        <div className="h-full overflow-hidden" style={{ width: `${twoColWidths[0]}%` }}>{chatPanel}</div>
+        <DragHandle onDrag={handleDrag2Col} />
+        <div className="h-full overflow-hidden" style={{ width: `${twoColWidths[1]}%` }}>{previewPanel}</div>
       </div>
     </div>
   );

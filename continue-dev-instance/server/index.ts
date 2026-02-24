@@ -184,18 +184,54 @@ async function main(): Promise<void> {
     socket.on('error', () => proxySocket.destroy());
   });
 
-  const viteArgs = ['vite', '--host', '0.0.0.0', '--port', '3000'];
-  if (BASE_PATH) {
-    viteArgs.push('--base', `${BASE_PATH}/preview/`);
+  // Vite dev server with health check and auto-restart
+  function startVite() {
+    const args = ['vite', '--host', '0.0.0.0', '--port', '3000'];
+    if (BASE_PATH) {
+      args.push('--base', `${BASE_PATH}/preview/`);
+    }
+    const proc = spawn('npx', args, {
+      cwd: PROJECT_ROOT,
+      stdio: 'inherit',
+    });
+    proc.on('error', (err) => {
+      console.error('Failed to start Vite dev server:', err.message);
+    });
+    return proc;
   }
-  const viteProcess = spawn('npx', viteArgs, {
-    cwd: PROJECT_ROOT,
-    stdio: 'inherit',
-  });
 
-  viteProcess.on('error', (err) => {
-    console.error('Failed to start Vite dev server:', err.message);
-  });
+  let viteFailCount = 0;
+  let viteRestartCount = 0;
+  const VITE_MAX_FAILURES = 3;
+  const VITE_MAX_RESTARTS = 3;
+  let viteProcess = startVite();
+
+  setInterval(async () => {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      const res = await fetch('http://localhost:3000/', { signal: controller.signal });
+      clearTimeout(timeout);
+      if (res.ok || res.status === 404) {
+        viteFailCount = 0;
+      } else {
+        viteFailCount++;
+      }
+    } catch {
+      viteFailCount++;
+    }
+
+    if (viteFailCount >= VITE_MAX_FAILURES && viteRestartCount < VITE_MAX_RESTARTS) {
+      console.warn(`Vite health check failed ${viteFailCount} times, restarting (attempt ${viteRestartCount + 1}/${VITE_MAX_RESTARTS})...`);
+      try { viteProcess.kill(); } catch {}
+      viteProcess = startVite();
+      viteFailCount = 0;
+      viteRestartCount++;
+    } else if (viteFailCount >= VITE_MAX_FAILURES && viteRestartCount >= VITE_MAX_RESTARTS) {
+      console.error(`Vite health check still failing after ${VITE_MAX_RESTARTS} restarts. Giving up auto-restart.`);
+      viteFailCount = 0;
+    }
+  }, 30_000);
 
   process.on('SIGTERM', () => {
     console.log('Received SIGTERM, shutting down...');

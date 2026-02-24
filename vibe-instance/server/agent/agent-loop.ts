@@ -95,6 +95,8 @@ export class AgentLoop extends EventEmitter {
   private conversationHistory: Message[] = [];
   private repoMap?: string;
   private currentAbortController: AbortController | null = null;
+  private retryCount = 0;
+  private tokenErrorCount = 0;
 
   constructor(repoMap?: string) {
     super();
@@ -214,8 +216,17 @@ export class AgentLoop extends EventEmitter {
 
     console.log(`Token estimate: ~${estimated}. Threshold: ${TOKEN_THRESHOLD}. Compacting...`);
 
-    // Take the oldest 60% of messages for summarization
-    const splitIndex = Math.max(2, Math.floor(this.conversationHistory.length * 0.6));
+    // Find a clean split boundary — a user text message (not toolResult)
+    let splitIndex = Math.max(2, Math.floor(this.conversationHistory.length * 0.6));
+    while (splitIndex < this.conversationHistory.length - 2) {
+      const msg = this.conversationHistory[splitIndex];
+      if (msg.role === 'user') {
+        const blocks = (msg.content ?? []) as ContentBlock[];
+        const isPlainText = blocks.some((b) => b.text !== undefined) && !blocks.some((b) => b.toolResult !== undefined);
+        if (isPlainText) break;
+      }
+      splitIndex++;
+    }
     const oldMessages = this.conversationHistory.slice(0, splitIndex);
     const recentMessages = this.conversationHistory.slice(splitIndex);
 
@@ -276,8 +287,12 @@ export class AgentLoop extends EventEmitter {
 
   private async runLoop(): Promise<void> {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-      // Check if conversation is getting too long and compact if needed
-      await this.compactHistory();
+      // Pre-flight: proactively compact if approaching model limit
+      const preFlightTokens = this.estimateTokens();
+      if (preFlightTokens > 120_000) {
+        console.log(`Pre-flight token check: ~${preFlightTokens} tokens, proactively compacting...`);
+        await this.compactHistory();
+      }
 
       const systemPrompt = buildSystemPrompt(this.repoMap);
 
@@ -307,6 +322,20 @@ export class AgentLoop extends EventEmitter {
         const errMsg = err instanceof Error ? err.message : String(err);
         const errLower = errMsg.toLowerCase();
         if (errLower.includes('too many tokens') || errLower.includes('too long') || errLower.includes('input is too long') || errLower.includes('throttl')) {
+          this.tokenErrorCount++;
+          if (this.tokenErrorCount >= 3) {
+            console.warn('3 consecutive token errors — hard-resetting conversation');
+            const lastUserMsg = this.conversationHistory.filter(m => m.role === 'user').pop();
+            const lastText = lastUserMsg?.content
+              ? (lastUserMsg.content as ContentBlock[]).find(b => b.text)?.text ?? ''
+              : '';
+            this.conversationHistory = [
+              { role: 'user', content: [{ text: `[Previous conversation was too long and has been reset. You were working on: ${lastText.slice(0, 500)}]` }] },
+              { role: 'assistant', content: [{ text: 'Understood. The conversation was getting too long, so I have a fresh context now. Let me continue where we left off.' }] },
+            ];
+            this.tokenErrorCount = 0;
+            continue;
+          }
           console.warn('Token limit hit, force-truncating history...');
           const keepCount = Math.max(4, Math.floor(this.conversationHistory.length * 0.3));
           this.conversationHistory = this.conversationHistory.slice(-keepCount);
@@ -319,8 +348,21 @@ export class AgentLoop extends EventEmitter {
           }
           continue;
         }
+        // Transient API errors — retry with exponential backoff
+        const isTransient = errLower.includes('throttl') || errLower.includes('timeout') ||
+          errLower.includes('service unavailable') || errLower.includes('internal server error') ||
+          errLower.includes('too many requests') || errLower.includes('rate exceeded');
+        if (isTransient && this.retryCount < 3) {
+          this.retryCount++;
+          const delaySec = 2 ** this.retryCount; // 2s, 4s, 8s
+          console.warn(`Transient API error, retry ${this.retryCount}/3 in ${delaySec}s...`);
+          await new Promise((r) => setTimeout(r, delaySec * 1000));
+          continue;
+        }
         throw err;
       }
+      this.retryCount = 0;
+      this.tokenErrorCount = 0;
 
       const assistantContent: ContentBlock[] = [];
       let stopReason: string | undefined;

@@ -341,6 +341,9 @@ async function main(): Promise<void> {
       viteProcess = startVite();
       viteFailCount = 0;
       viteRestartCount++;
+    } else if (viteFailCount >= VITE_MAX_FAILURES && viteRestartCount >= VITE_MAX_RESTARTS) {
+      console.error(`Vite health check still failing after ${VITE_MAX_RESTARTS} restarts. Giving up auto-restart.`);
+      viteFailCount = 0;
     }
   }, 30_000);
 

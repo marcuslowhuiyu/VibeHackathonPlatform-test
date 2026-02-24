@@ -178,6 +178,45 @@ export class AgentLoop extends EventEmitter {
       }
     }
 
+    // Mid-conversation validation: ensure every assistant tool_use has a matching
+    // toolResult in the immediately following user message. Fabricate missing
+    // toolResults to prevent "Expected toolResult" API errors.
+    for (let i = 0; i < h.length - 1; i++) {
+      if (h[i].role !== 'assistant') continue;
+      const assistantBlocks = (h[i].content ?? []) as ContentBlock[];
+      const toolUseIds = new Set<string>();
+      for (const b of assistantBlocks) {
+        if (b.toolUse?.toolUseId) toolUseIds.add(b.toolUse.toolUseId);
+      }
+      if (toolUseIds.size === 0) continue;
+
+      const next = h[i + 1];
+      if (!next || next.role !== 'user') {
+        // No following user message — fabricate one with all toolResults
+        const fabricated: ContentBlock[] = [...toolUseIds].map((id) => ({
+          toolResult: { toolUseId: id, content: [{ text: '[Result unavailable — conversation was interrupted]' }] },
+        }));
+        h.splice(i + 1, 0, { role: 'user', content: fabricated });
+        continue;
+      }
+
+      // Check which toolResult IDs exist in the next user message
+      const userBlocks = (next.content ?? []) as ContentBlock[];
+      const resultIds = new Set<string>();
+      for (const b of userBlocks) {
+        if (b.toolResult?.toolUseId) resultIds.add(b.toolResult.toolUseId);
+      }
+
+      // Fabricate missing toolResult blocks
+      for (const id of toolUseIds) {
+        if (!resultIds.has(id)) {
+          userBlocks.push({
+            toolResult: { toolUseId: id, content: [{ text: '[Result unavailable — conversation was interrupted]' }] },
+          });
+        }
+      }
+    }
+
     // Bedrock requires conversation to start with a user message
     if (h.length > 0 && h[0].role === 'assistant') {
       h.unshift({ role: 'user', content: [{ text: '[Conversation resumed]' }] });
@@ -306,6 +345,10 @@ export class AgentLoop extends EventEmitter {
 
   private async runLoop(): Promise<void> {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+      // Sanitize before every API call to catch mid-conversation mismatches
+      // (e.g. orphaned tool_use from cancellation, truncation edge cases)
+      this.sanitizeHistory();
+
       // Pre-flight: proactively compact if approaching model limit
       const preFlightTokens = this.estimateTokens();
       if (preFlightTokens > 120_000) {

@@ -41,6 +41,14 @@ Styling:
 - Use a clean, consistent color palette. Prefer rounded corners, subtle shadows, and comfortable whitespace.
 - Keep code simple and approachable. Prefer clean, readable component structures over clever abstractions.
 
+Viewport & Layout (IMPORTANT):
+- The app renders in a preview panel that is roughly 600–900px wide, NOT a full-screen browser window. Design with this constrained width in mind.
+- Use fluid, responsive layouts: w-full, max-w-*, percentages, and flex-wrap. Never use fixed pixel widths greater than 500px.
+- Design mobile-first: use single-column layouts by default, then expand with Tailwind responsive breakpoints (sm:, md:, lg:) for wider viewports.
+- Use responsive grid patterns like grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 instead of fixed multi-column layouts.
+- Ensure text, images, and containers scale fluidly — avoid overflow-x. Use max-w-full on images and media.
+- Test mentally: "Would this look good at 700px wide?" If not, simplify the layout.
+
 Key capabilities:
 - Read, write, and edit project files
 - Run shell commands (npm install, git, tests, build tools)

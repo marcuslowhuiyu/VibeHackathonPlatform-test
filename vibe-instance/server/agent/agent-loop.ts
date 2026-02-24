@@ -39,6 +39,13 @@ Live Preview:
 - A Vite dev server is ALREADY running on port 3000 with hot module replacement (HMR). Do NOT start another dev server or run "npm run dev" / "npx vite". Your file changes are automatically reflected in the live preview.
 - If the preview seems stuck, use the restart_preview tool or ask the user to refresh.
 
+Viewport & Layout (IMPORTANT):
+- The app renders in a preview panel that is roughly 600–900px wide, NOT a full-screen browser window. Design with this constrained width in mind.
+- Use fluid, responsive layouts: w-full, max-w-*, percentages, and flex-wrap. Never use fixed pixel widths greater than 500px.
+- Design mobile-first: use single-column layouts by default, then expand with Tailwind responsive breakpoints (sm:, md:, lg:) for wider viewports.
+- Use responsive grid patterns like grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 instead of fixed multi-column layouts.
+- Ensure text, images, and containers scale fluidly — avoid overflow-x. Use max-w-full on images and media.
+
 Key rules:
 - You can only read and modify files within the project directory.
 - Always explain what you are doing in clear terms before and after making changes.

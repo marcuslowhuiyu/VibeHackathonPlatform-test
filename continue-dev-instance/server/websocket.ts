@@ -9,6 +9,10 @@ function send(ws: WebSocket, data: Record<string, unknown>): void {
   }
 }
 
+function sendToast(ws: WebSocket, type: 'info' | 'warning' | 'error' | 'success', message: string): void {
+  send(ws, { type: 'toast', toast_type: type, message });
+}
+
 export function setupWebSocket(server: Server, bridge: ContinueBridge): void {
   const wss = new WebSocketServer({ noServer: true });
 
@@ -114,7 +118,7 @@ export function setupWebSocket(server: Server, bridge: ContinueBridge): void {
       // ---- chat message ------------------------------------------------
       if (parsed.type === 'chat' && typeof parsed.message === 'string') {
         if (isProcessing) {
-          send(ws, { type: 'error', message: 'Still processing previous message' });
+          sendToast(ws, 'warning', 'Still processing previous message');
           return;
         }
         autoFixAttempts = 0;
@@ -153,7 +157,7 @@ export function setupWebSocket(server: Server, bridge: ContinueBridge): void {
         lastErrorTime = now;
         autoFixAttempts++;
 
-        send(ws, { type: 'agent:text', content: `[Auto-detected error] ${parsed.error}\n\nAttempting to fix...` });
+        sendToast(ws, 'info', 'Auto-fixing preview error...');
 
         isProcessing = true;
         try {
@@ -180,6 +184,7 @@ export function setupWebSocket(server: Server, bridge: ContinueBridge): void {
 
         console.log('Conversation reset: history cleared, session reset');
         send(ws, { type: 'conversation_reset' });
+        sendToast(ws, 'success', 'Conversation reset');
         return;
       }
 

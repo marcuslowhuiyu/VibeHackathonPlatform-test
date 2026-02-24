@@ -15,6 +15,10 @@ function send(ws: WebSocket, data: Record<string, unknown>): void {
   }
 }
 
+function sendToast(ws: WebSocket, type: 'info' | 'warning' | 'error' | 'success', message: string): void {
+  send(ws, { type: 'toast', toast_type: type, message });
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -175,7 +179,7 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
       // ---- chat message ------------------------------------------------
       if (parsed.type === 'chat' && typeof parsed.message === 'string') {
         if (isProcessing) {
-          send(ws, { type: 'error', message: 'Still processing previous message' });
+          sendToast(ws, 'warning', 'Still processing previous message');
           return;
         }
         const userMessage = parsed.message;
@@ -221,8 +225,7 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
 
         const errorMessage = `The live preview has an error:\n\`\`\`\n${parsed.error}\n\`\`\`\nPlease investigate and fix this error.`;
 
-        // Show the error in chat as a system message
-        send(ws, { type: 'agent:text', content: `[Auto-detected error] ${parsed.error}\n\nAttempting to fix...` });
+        sendToast(ws, 'info', 'Auto-fixing preview error...');
 
         isProcessing = true;
         try {
@@ -256,6 +259,7 @@ export function setupWebSocket(server: Server, agentLoop: AgentLoop): void {
         }
 
         send(ws, { type: 'conversation_reset' });
+        sendToast(ws, 'success', 'Conversation reset');
         return;
       }
 

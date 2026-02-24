@@ -109,6 +109,7 @@ export class AgentLoop extends EventEmitter {
   private conversationHistory: Message[] = [];
   private repoMap?: string;
   private currentAbortController: AbortController | null = null;
+  private retryCount = 0;
 
   constructor(repoMap?: string) {
     super();
@@ -423,9 +424,21 @@ export class AgentLoop extends EventEmitter {
             abortSignal: this.currentAbortController!.signal,
           });
         } else {
+          // Transient API errors — retry with exponential backoff
+          const isTransient = errLower.includes('throttl') || errLower.includes('timeout') ||
+            errLower.includes('service unavailable') || errLower.includes('internal server error') ||
+            errLower.includes('too many requests') || errLower.includes('rate exceeded');
+          if (isTransient && this.retryCount < 3) {
+            this.retryCount++;
+            const delaySec = 2 ** this.retryCount; // 2s, 4s, 8s
+            console.warn(`Transient API error, retry ${this.retryCount}/3 in ${delaySec}s...`);
+            await new Promise((r) => setTimeout(r, delaySec * 1000));
+            continue;
+          }
           throw err;
         }
       }
+      this.retryCount = 0;
 
       const assistantContent: ContentBlock[] = [];
       let stopReason: string | undefined;

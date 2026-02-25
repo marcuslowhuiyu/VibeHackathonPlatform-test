@@ -639,7 +639,7 @@ phases:
   }
 }
 
-export const AI_EXTENSIONS = ['continue', 'cline', 'vibe', 'loclaude-lite', 'loclaude'] as const;
+export const AI_EXTENSIONS = ['continue', 'cline', 'vibe', 'loclaude-lite', 'loclaude', 'continue-dev'] as const;
 export type AIExtension = typeof AI_EXTENSIONS[number];
 
 export const EXTENSION_DIRECTORIES: Record<AIExtension, string> = {
@@ -648,6 +648,7 @@ export const EXTENSION_DIRECTORIES: Record<AIExtension, string> = {
   vibe: 'vibe-instance',
   'loclaude-lite': 'loclaude-lite-instance',
   loclaude: 'loclaude-instance',
+  'continue-dev': 'continue-dev-instance',
 };
 
 export async function checkSetupStatus(): Promise<{

@@ -114,6 +114,7 @@ export async function runTask(instanceId: string, extension: string = 'continue'
     vibe: 'vibe',
     'loclaude-lite': 'loclaude-lite',
     loclaude: 'loclaude',
+    'continue-dev': 'continue-dev',
   };
   const imageTag = imageTagMap[extension] || 'continue';
 

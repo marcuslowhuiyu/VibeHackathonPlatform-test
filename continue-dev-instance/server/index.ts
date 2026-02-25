@@ -5,14 +5,8 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs/promises';
 import { spawn } from 'child_process';
-import chokidar from 'chokidar';
-import { AgentLoop } from './agent/agent-loop.js';
-import { generateRepoMap } from './agent/repo-map.js';
+import { ContinueBridge } from './agent/continue-bridge.js';
 import { setupWebSocket } from './websocket.js';
-
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
 
 const PROJECT_ROOT = '/home/workspace/project';
 const INSTANCE_ID = process.env.INSTANCE_ID || '';
@@ -22,10 +16,6 @@ const PORT = 8080;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 interface FileEntry {
   path: string;
   type: 'file' | 'directory';
@@ -33,10 +23,6 @@ interface FileEntry {
 
 const SKIPPED_DIRS = new Set(['node_modules', '.git', 'dist', '.next', '.cache']);
 
-/**
- * Recursively walk a directory up to `maxDepth` levels, returning a flat list
- * of file and directory entries with paths relative to `root`.
- */
 async function walkProjectFiles(
   dir: string,
   root: string,
@@ -60,7 +46,6 @@ async function walkProjectFiles(
 
     if (entry.isDirectory()) {
       if (SKIPPED_DIRS.has(entry.name)) continue;
-
       results.push({ path: relativePath, type: 'directory' });
       const children = await walkProjectFiles(fullPath, root, depth + 1, maxDepth);
       results.push(...children);
@@ -72,24 +57,14 @@ async function walkProjectFiles(
   return results;
 }
 
-/**
- * Validate that a resolved file path is within the project root to prevent
- * directory traversal attacks.
- */
 function isWithinRoot(filePath: string, root: string): boolean {
   const resolved = path.resolve(root, filePath);
   return resolved.startsWith(path.resolve(root));
 }
 
-// ---------------------------------------------------------------------------
-// Express app
-// ---------------------------------------------------------------------------
-
 const app = express();
 app.use(express.json());
 
-// Strip the ALB base path prefix (/i/{instanceId}) so routes work at /
-// The ALB routes /i/{instanceId}/* to this container on port 8080
 if (BASE_PATH) {
   app.use((req, _res, next) => {
     if (req.url.startsWith(BASE_PATH)) {
@@ -99,23 +74,16 @@ if (BASE_PATH) {
   });
 }
 
-// Serve the built client UI
 const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
 app.use(express.static(clientDistPath));
-
-// ---- Config endpoint (client reads base path from here) ------------------
 
 app.get('/api/config', (_req, res) => {
   res.json({ basePath: BASE_PATH, instanceId: INSTANCE_ID });
 });
 
-// ---- Health check --------------------------------------------------------
-
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
-
-// ---- Project file listing ------------------------------------------------
 
 app.get('/api/project-files', async (_req, res) => {
   try {
@@ -127,10 +95,8 @@ app.get('/api/project-files', async (_req, res) => {
   }
 });
 
-// ---- Read a single project file ------------------------------------------
-
 app.get('/api/file/:filePath(*)', async (req, res) => {
-  const filePath = req.params.filePath;
+  const filePath = (req.params as Record<string, string>)['filePath(*)'] || (req.params as Record<string, string>).filePath;
 
   if (!isWithinRoot(filePath, PROJECT_ROOT)) {
     res.status(403).json({ error: 'Access denied: path is outside the project root' });
@@ -148,14 +114,7 @@ app.get('/api/file/:filePath(*)', async (req, res) => {
   }
 });
 
-// ---- Reverse proxy for the user's Vite dev server (port 3000) -----------
-// The ALB only routes to port 8080, so we proxy /preview/* to localhost:3000
-
 app.use('/preview', (req, res) => {
-  // Reconstruct the full path Vite expects (with --base prefix when behind ALB).
-  // Express already stripped /i/{id}, and app.use('/preview') stripped /preview,
-  // so req.url is the remainder (e.g. / or /@vite/client).
-  // Vite was started with --base /i/{id}/preview/, so re-add that prefix.
   const proxyPath = BASE_PATH
     ? `${BASE_PATH}/preview${req.url || '/'}`
     : (req.url || '/');
@@ -165,7 +124,7 @@ app.use('/preview', (req, res) => {
       port: 3000,
       path: proxyPath,
       method: req.method,
-      headers: { ...req.headers, host: `127.0.0.1:3000` },
+      headers: { ...req.headers, host: '127.0.0.1:3000' },
     },
     (proxyRes) => {
       res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
@@ -174,7 +133,6 @@ app.use('/preview', (req, res) => {
   );
 
   proxyReq.on('error', () => {
-    // Vite dev server not ready yet — return auto-refreshing HTML
     res.status(503).send(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Loading Preview...</title>
 <meta http-equiv="refresh" content="3">
@@ -187,96 +145,30 @@ app.use('/preview', (req, res) => {
   req.pipe(proxyReq, { end: true });
 });
 
-// ---- SPA fallback --------------------------------------------------------
-
 app.get('*', (_req, res) => {
   res.sendFile(path.join(clientDistPath, 'index.html'));
 });
 
-// ---------------------------------------------------------------------------
-// Startup
-// ---------------------------------------------------------------------------
-
 async function main(): Promise<void> {
-  // Generate a repo map for richer context
-  let repoMap: string | undefined;
-  try {
-    repoMap = await generateRepoMap(PROJECT_ROOT);
-    console.log('Repo map generated');
-  } catch (err) {
-    console.warn('Failed to generate repo map:', err);
-  }
+  const bridge = new ContinueBridge();
+  console.log('Continue bridge initialized');
 
-  // Create the agent loop
-  const agentLoop = new AgentLoop(repoMap);
-
-  // File watcher for auto repo map refresh
-  const watcher = chokidar.watch(PROJECT_ROOT, {
-    ignored: /(node_modules|\.git|dist|\.next|\.cache)/,
-    persistent: true,
-    ignoreInitial: true,
-  });
-
-  let repoMapRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-
-  watcher.on('all', () => {
-    if (repoMapRefreshTimer) clearTimeout(repoMapRefreshTimer);
-    repoMapRefreshTimer = setTimeout(async () => {
-      try {
-        const newMap = await generateRepoMap(PROJECT_ROOT);
-        agentLoop.updateRepoMap(newMap);
-        console.log('Repo map refreshed');
-      } catch (err) {
-        console.warn('Failed to refresh repo map:', err);
-      }
-    }, 2000);
-  });
-
-  // Verify Bedrock connectivity
-  const region = process.env.AWS_REGION || '';
-  let inferencePrefix = 'us';
-  if (region.startsWith('ap-')) inferencePrefix = 'apac';
-  else if (region.startsWith('eu-')) inferencePrefix = 'eu';
-  const bedrockModelId = process.env.BEDROCK_MODEL_ID || `${inferencePrefix}.anthropic.claude-sonnet-4-20250514-v1:0`;
-  console.log(`Checking Bedrock connectivity (model: ${bedrockModelId}, region: ${process.env.AWS_REGION || 'default'})...`);
-  try {
-    const { BedrockRuntimeClient, ConverseCommand } = await import('@aws-sdk/client-bedrock-runtime');
-    const testClient = new BedrockRuntimeClient({});
-    await testClient.send(new ConverseCommand({
-      modelId: bedrockModelId,
-      messages: [{ role: 'user', content: [{ text: 'hi' }] }],
-      inferenceConfig: { maxTokens: 1 },
-    }));
-    console.log('Bedrock connectivity OK');
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`WARNING: Bedrock health check failed: ${message}`);
-    console.error('Chat will not work until Bedrock access is configured.');
-    console.error(`Model: ${bedrockModelId} | Region: ${process.env.AWS_REGION || 'not set'}`);
-  }
-
-  // Create the HTTP server and attach WebSocket
   const server = createServer(app);
-  setupWebSocket(server, agentLoop);
+  setupWebSocket(server, bridge);
 
-  // Proxy WebSocket upgrades for /preview to Vite's HMR server on port 3000
-  // Uses raw TCP socket so the full WebSocket handshake (including Sec-WebSocket-Accept) is forwarded.
   server.on('upgrade', (req, socket, head) => {
     let url = req.url || '';
-    // Strip ALB base path prefix
     if (BASE_PATH && url.startsWith(BASE_PATH)) {
       url = url.slice(BASE_PATH.length) || '/';
     }
     if (!url.includes('/preview')) return;
 
-    // Reconstruct the full path Vite expects (with --base prefix when behind ALB)
     const remainder = url.replace(/^\/preview/, '') || '/';
     const vitePath = BASE_PATH
       ? `${BASE_PATH}/preview${remainder}`
       : remainder;
 
     const proxySocket = net.connect(3000, '127.0.0.1', () => {
-      // Reconstruct the HTTP upgrade request and send to Vite
       const reqHeaders = Object.entries(req.headers)
         .map(([k, v]) => `${k}: ${v}`)
         .join('\r\n');
@@ -284,18 +176,12 @@ async function main(): Promise<void> {
         `GET ${vitePath} HTTP/1.1\r\nHost: 127.0.0.1:3000\r\n${reqHeaders}\r\n\r\n`
       );
       if (head && head.length) proxySocket.write(head);
-
-      // Pipe data bidirectionally
       proxySocket.pipe(socket);
       socket.pipe(proxySocket);
     });
 
-    proxySocket.on('error', () => {
-      socket.destroy();
-    });
-    socket.on('error', () => {
-      proxySocket.destroy();
-    });
+    proxySocket.on('error', () => socket.destroy());
+    socket.on('error', () => proxySocket.destroy());
   });
 
   // Vite dev server with health check and auto-restart
@@ -347,18 +233,15 @@ async function main(): Promise<void> {
     }
   }, 30_000);
 
-  // Graceful shutdown
   process.on('SIGTERM', () => {
     console.log('Received SIGTERM, shutting down...');
-    watcher.close();
     viteProcess.kill();
     server.close();
     process.exit(0);
   });
 
-  // Start listening
   server.listen(PORT, () => {
-    console.log(`Loclaude instance running on port ${PORT}`);
+    console.log(`Continue-dev instance running on port ${PORT}`);
   });
 }
 

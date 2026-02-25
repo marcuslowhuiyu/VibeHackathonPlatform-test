@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import {
   BedrockRuntimeClient,
+  ConverseCommand,
   ConverseStreamCommand,
   type ContentBlock,
   type Message,
@@ -25,6 +26,7 @@ function getDefaultModelId(): string {
 }
 const MODEL_ID = process.env.BEDROCK_MODEL_ID || getDefaultModelId();
 const MAX_ITERATIONS = 25; // safety limit to prevent infinite loops
+const TOKEN_THRESHOLD = 150_000;  // ~150K tokens — trigger summarization
 
 // ---------------------------------------------------------------------------
 // System prompts
@@ -38,6 +40,14 @@ Styling:
 - Ensure layouts are well-centered with proper spacing (p-4, gap-4, etc.), padding, and responsive design.
 - Use a clean, consistent color palette. Prefer rounded corners, subtle shadows, and comfortable whitespace.
 - Keep code simple and approachable. Prefer clean, readable component structures over clever abstractions.
+
+Viewport & Layout (IMPORTANT):
+- The app renders in a preview panel that is roughly 600–900px wide, NOT a full-screen browser window. Design with this constrained width in mind.
+- Use fluid, responsive layouts: w-full, max-w-*, percentages, and flex-wrap. Never use fixed pixel widths greater than 500px.
+- Design mobile-first: use single-column layouts by default, then expand with Tailwind responsive breakpoints (sm:, md:, lg:) for wider viewports.
+- Use responsive grid patterns like grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 instead of fixed multi-column layouts.
+- Ensure text, images, and containers scale fluidly — avoid overflow-x. Use max-w-full on images and media.
+- Test mentally: "Would this look good at 700px wide?" If not, simplify the layout.
 
 Key capabilities:
 - Read, write, and edit project files
@@ -103,6 +113,9 @@ export class AgentLoop extends EventEmitter {
   private client: BedrockRuntimeClient;
   private conversationHistory: Message[] = [];
   private repoMap?: string;
+  private currentAbortController: AbortController | null = null;
+  private retryCount = 0;
+  private tokenErrorCount = 0;
 
   constructor(repoMap?: string) {
     super();
@@ -117,6 +130,198 @@ export class AgentLoop extends EventEmitter {
   /** Update the repo map used in the system prompt. */
   updateRepoMap(newMap: string): void {
     this.repoMap = newMap;
+  }
+
+  /** Clear all conversation history to start a fresh conversation. */
+  clearHistory(): void {
+    this.conversationHistory = [];
+  }
+
+  /** Abort the currently running agent loop iteration. */
+  cancel(): void {
+    if (this.currentAbortController) {
+      this.currentAbortController.abort();
+      this.currentAbortController = null;
+    }
+  }
+
+  /**
+   * Ensure conversation history doesn't start mid-tool-exchange.
+   * Bedrock requires every tool_use to have a matching toolResult in the next
+   * user message. After truncation we might slice right between them.
+   */
+  private sanitizeHistory(): void {
+    const h = this.conversationHistory;
+    if (h.length === 0) return;
+
+    // If the first message is a user message containing only toolResult blocks,
+    // drop it (the assistant tool_use it responds to was truncated).
+    while (h.length > 0 && h[0].role === 'user') {
+      const blocks = (h[0].content ?? []) as ContentBlock[];
+      const allToolResults = blocks.length > 0 && blocks.every((b) => b.toolResult !== undefined);
+      if (allToolResults) {
+        h.shift();
+      } else {
+        break;
+      }
+    }
+
+    // If the last message is an assistant with tool_use blocks (no following toolResult),
+    // drop it to avoid the "Expected toolResult" error.
+    while (h.length > 0 && h[h.length - 1].role === 'assistant') {
+      const blocks = (h[h.length - 1].content ?? []) as ContentBlock[];
+      const hasToolUse = blocks.some((b) => b.toolUse !== undefined);
+      if (hasToolUse) {
+        h.pop();
+      } else {
+        break;
+      }
+    }
+
+    // Mid-conversation validation: ensure every assistant tool_use has a matching
+    // toolResult in the immediately following user message. Fabricate missing
+    // toolResults to prevent "Expected toolResult" API errors.
+    for (let i = 0; i < h.length - 1; i++) {
+      if (h[i].role !== 'assistant') continue;
+      const assistantBlocks = (h[i].content ?? []) as ContentBlock[];
+      const toolUseIds = new Set<string>();
+      for (const b of assistantBlocks) {
+        if (b.toolUse?.toolUseId) toolUseIds.add(b.toolUse.toolUseId);
+      }
+      if (toolUseIds.size === 0) continue;
+
+      const next = h[i + 1];
+      if (!next || next.role !== 'user') {
+        // No following user message — fabricate one with all toolResults
+        const fabricated: ContentBlock[] = [...toolUseIds].map((id) => ({
+          toolResult: { toolUseId: id, content: [{ text: '[Result unavailable — conversation was interrupted]' }] },
+        }));
+        h.splice(i + 1, 0, { role: 'user', content: fabricated });
+        continue;
+      }
+
+      // Check which toolResult IDs exist in the next user message
+      const userBlocks = (next.content ?? []) as ContentBlock[];
+      const resultIds = new Set<string>();
+      for (const b of userBlocks) {
+        if (b.toolResult?.toolUseId) resultIds.add(b.toolResult.toolUseId);
+      }
+
+      // Fabricate missing toolResult blocks
+      for (const id of toolUseIds) {
+        if (!resultIds.has(id)) {
+          userBlocks.push({
+            toolResult: { toolUseId: id, content: [{ text: '[Result unavailable — conversation was interrupted]' }] },
+          });
+        }
+      }
+    }
+
+    // Bedrock requires conversation to start with a user message
+    if (h.length > 0 && h[0].role === 'assistant') {
+      h.unshift({ role: 'user', content: [{ text: '[Conversation resumed]' }] });
+    }
+  }
+
+  /** Estimate total tokens in conversation history using ~4 chars/token heuristic. */
+  private estimateTokens(): number {
+    let chars = 0;
+    for (const msg of this.conversationHistory) {
+      if (!msg.content) continue;
+      for (const block of msg.content as ContentBlock[]) {
+        if (block.text) chars += block.text.length;
+        if (block.toolUse) {
+          chars += (block.toolUse.name?.length || 0);
+          chars += JSON.stringify(block.toolUse.input || {}).length;
+        }
+        if (block.toolResult?.content) {
+          for (const c of block.toolResult.content) {
+            if ('text' in c && c.text) chars += c.text.length;
+          }
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rc = (block as any)?.reasoningContent;
+        if (rc?.reasoningText?.text) chars += rc.reasoningText.text.length;
+      }
+    }
+    return Math.ceil(chars / 4);
+  }
+
+  /** Extract plain text from a conversation message for summarization. */
+  private extractMessageText(msg: Message): string {
+    if (!msg.content) return '';
+    const parts: string[] = [];
+    for (const block of msg.content as ContentBlock[]) {
+      if (block.text) parts.push(block.text);
+      if (block.toolUse) {
+        parts.push(`[Tool: ${block.toolUse.name}]`);
+      }
+      if (block.toolResult?.content) {
+        for (const c of block.toolResult.content) {
+          if ('text' in c && c.text) {
+            parts.push(c.text.length > 500 ? c.text.slice(0, 500) + '...' : c.text);
+          }
+        }
+      }
+    }
+    return `${msg.role}: ${parts.join(' ')}`;
+  }
+
+  /** Compact conversation history if it exceeds the token threshold. */
+  private async compactHistory(): Promise<void> {
+    const estimated = this.estimateTokens();
+    if (estimated < TOKEN_THRESHOLD) return;
+
+    console.log(`Token estimate: ~${estimated}. Threshold: ${TOKEN_THRESHOLD}. Compacting...`);
+
+    // Find a clean split boundary — a user text message (not toolResult)
+    let splitIndex = Math.max(2, Math.floor(this.conversationHistory.length * 0.6));
+    while (splitIndex < this.conversationHistory.length - 2) {
+      const msg = this.conversationHistory[splitIndex];
+      if (msg.role === 'user') {
+        const blocks = (msg.content ?? []) as ContentBlock[];
+        const isPlainText = blocks.some((b) => b.text !== undefined) && !blocks.some((b) => b.toolResult !== undefined);
+        if (isPlainText) break;
+      }
+      splitIndex++;
+    }
+    const oldMessages = this.conversationHistory.slice(0, splitIndex);
+    const recentMessages = this.conversationHistory.slice(splitIndex);
+
+    // Build text summary of old messages
+    const oldText = oldMessages.map((m) => this.extractMessageText(m)).join('\n');
+
+    try {
+      const summaryCommand = new ConverseCommand({
+        modelId: MODEL_ID,
+        messages: [{
+          role: 'user',
+          content: [{ text: `Summarize this conversation concisely in 2-3 paragraphs. Preserve: key decisions made, files created/modified, current task context, and any unfinished work.\n\n${oldText.slice(0, 50000)}` }],
+        }],
+        inferenceConfig: { maxTokens: 1024 },
+      });
+
+      const summaryResponse = await this.client.send(summaryCommand);
+      const summaryText = summaryResponse.output?.message?.content?.[0]?.text || '';
+
+      if (summaryText) {
+        this.conversationHistory = [
+          { role: 'user', content: [{ text: `[Previous conversation summary]\n${summaryText}` }] },
+          { role: 'assistant', content: [{ text: 'Understood. I have the context from our previous conversation and will continue from here.' }] },
+          ...recentMessages,
+        ];
+        this.sanitizeHistory();
+        console.log(`History compacted: ${oldMessages.length + recentMessages.length} messages → ${this.conversationHistory.length} messages`);
+        return;
+      }
+    } catch (err) {
+      console.warn('Summarization failed, falling back to truncation:', err);
+    }
+
+    // Fallback: simple truncation — keep only recent messages
+    this.conversationHistory = recentMessages;
+    this.sanitizeHistory();
+    console.log(`History truncated: kept ${recentMessages.length} most recent messages`);
   }
 
   async processMessage(userMessage: string): Promise<void> {
@@ -140,7 +345,20 @@ export class AgentLoop extends EventEmitter {
 
   private async runLoop(): Promise<void> {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+      // Sanitize before every API call to catch mid-conversation mismatches
+      // (e.g. orphaned tool_use from cancellation, truncation edge cases)
+      this.sanitizeHistory();
+
+      // Pre-flight: proactively compact if approaching model limit
+      const preFlightTokens = this.estimateTokens();
+      if (preFlightTokens > 120_000) {
+        console.log(`Pre-flight token check: ~${preFlightTokens} tokens, proactively compacting...`);
+        await this.compactHistory();
+      }
+
       const systemPrompt = buildSystemPrompt(this.repoMap);
+
+      this.currentAbortController = new AbortController();
 
       const command = new ConverseStreamCommand({
         modelId: MODEL_ID,
@@ -152,7 +370,61 @@ export class AgentLoop extends EventEmitter {
       });
 
       // Collect the streamed response
-      const response = await this.client.send(command);
+      let response;
+      try {
+        response = await this.client.send(command, {
+          abortSignal: this.currentAbortController.signal,
+        });
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          this.currentAbortController = null;
+          return;
+        }
+        // Token limit error — force truncate and retry
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const errLower = errMsg.toLowerCase();
+        if (errLower.includes('too many tokens') || errLower.includes('too long') || errLower.includes('input is too long') || errLower.includes('throttl')) {
+          this.tokenErrorCount++;
+          if (this.tokenErrorCount >= 3) {
+            console.warn('3 consecutive token errors — hard-resetting conversation');
+            const lastUserMsg = this.conversationHistory.filter(m => m.role === 'user').pop();
+            const lastText = lastUserMsg?.content
+              ? (lastUserMsg.content as ContentBlock[]).find(b => b.text)?.text ?? ''
+              : '';
+            this.conversationHistory = [
+              { role: 'user', content: [{ text: `[Previous conversation was too long and has been reset. You were working on: ${lastText.slice(0, 500)}]` }] },
+              { role: 'assistant', content: [{ text: 'Understood. The conversation was getting too long, so I have a fresh context now. Let me continue where we left off.' }] },
+            ];
+            this.tokenErrorCount = 0;
+            continue;
+          }
+          console.warn('Token limit hit, force-truncating history...');
+          const keepCount = Math.max(4, Math.floor(this.conversationHistory.length * 0.3));
+          this.conversationHistory = this.conversationHistory.slice(-keepCount);
+          this.sanitizeHistory();
+          // If rate-limited (not just context overflow), wait before retrying
+          if (errLower.includes('wait') || errLower.includes('throttl')) {
+            const delaySec = 5 * (iteration + 1);
+            console.warn(`Rate limited, waiting ${delaySec}s before retry...`);
+            await new Promise((r) => setTimeout(r, delaySec * 1000));
+          }
+          continue;
+        }
+        // Transient API errors — retry with exponential backoff
+        const isTransient = errLower.includes('throttl') || errLower.includes('timeout') ||
+          errLower.includes('service unavailable') || errLower.includes('internal server error') ||
+          errLower.includes('too many requests') || errLower.includes('rate exceeded');
+        if (isTransient && this.retryCount < 3) {
+          this.retryCount++;
+          const delaySec = 2 ** this.retryCount; // 2s, 4s, 8s
+          console.warn(`Transient API error, retry ${this.retryCount}/3 in ${delaySec}s...`);
+          await new Promise((r) => setTimeout(r, delaySec * 1000));
+          continue;
+        }
+        throw err;
+      }
+      this.retryCount = 0;
+      this.tokenErrorCount = 0;
 
       const assistantContent: ContentBlock[] = [];
       let stopReason: string | undefined;
@@ -221,6 +493,18 @@ export class AgentLoop extends EventEmitter {
             stopReason = event.messageStop.stopReason;
           }
         }
+      }
+
+      // Check if cancelled during streaming
+      if (this.currentAbortController?.signal.aborted) {
+        if (assistantContent.length > 0) {
+          this.conversationHistory.push({
+            role: "assistant",
+            content: assistantContent,
+          });
+        }
+        this.currentAbortController = null;
+        return;
       }
 
       // Append the full assistant message to conversation history
@@ -315,6 +599,7 @@ export class AgentLoop extends EventEmitter {
       }
 
       // Done
+      this.currentAbortController = null;
       return;
     }
 

@@ -22,7 +22,12 @@ export function useWebSocket(): {
   sendMessage: (text: string) => void;
   sendElementClick: (info: { tagName: string; textContent: string; selector: string }) => void;
   sendPreviewError: (error: string) => void;
+  resetConversation: () => void;
+  cancelResponse: () => void;
   basePath: string;
+  toasts: Array<{ id: number; type: 'info' | 'warning' | 'error' | 'success'; message: string }>;
+  isConnected: boolean;
+  dismissToast: (id: number) => void;
 } {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isThinking, setIsThinking] = useState(false);
@@ -32,6 +37,21 @@ export function useWebSocket(): {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const basePath = getBasePath();
+  const [toasts, setToasts] = useState<Array<{ id: number; type: 'info' | 'warning' | 'error' | 'success'; message: string }>>([]);
+  const toastIdRef = useRef(0);
+  const [isConnected, setIsConnected] = useState(false);
+
+  const addToast = useCallback((type: 'info' | 'warning' | 'error' | 'success', message: string) => {
+    const id = ++toastIdRef.current;
+    setToasts(prev => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 5000);
+  }, []);
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
 
   useEffect(() => {
     function connect() {
@@ -42,6 +62,7 @@ export function useWebSocket(): {
 
       ws.onopen = () => {
         // Connected
+        setIsConnected(true);
       };
 
       ws.onmessage = (event) => {
@@ -61,7 +82,8 @@ export function useWebSocket(): {
             break;
 
           case 'agent:text':
-            // Clear thinking text when actual response starts
+            // Response arrived — clear thinking state
+            setIsThinking(false);
             setThinkingText('');
             setMessages((prev) => {
               const updated = [...prev];
@@ -138,11 +160,32 @@ export function useWebSocket(): {
               { role: 'assistant', content: `Error: ${data.message || 'Something went wrong'}`, isError: true },
             ]);
             break;
+
+          case 'conversation_reset':
+            setMessages([]);
+            setIsThinking(false);
+            setThinkingText('');
+            setPrefillMessage('');
+            setCurrentFileChange(null);
+            break;
+
+          case 'chat_history':
+            if (Array.isArray(data.messages)) {
+              setMessages(data.messages);
+            }
+            break;
+
+          case 'toast':
+            if (data.toast_type && data.message) {
+              addToast(data.toast_type, data.message);
+            }
+            break;
         }
       };
 
       ws.onclose = () => {
         wsRef.current = null;
+        setIsConnected(false);
         reconnectTimerRef.current = setTimeout(() => {
           connect();
         }, 2000);
@@ -190,6 +233,18 @@ export function useWebSocket(): {
     }
   }, []);
 
+  const resetConversation = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'reset_conversation' }));
+    }
+  }, []);
+
+  const cancelResponse = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'cancel_response' }));
+    }
+  }, []);
+
   return {
     messages,
     isThinking,
@@ -199,6 +254,11 @@ export function useWebSocket(): {
     sendMessage,
     sendElementClick,
     sendPreviewError,
+    resetConversation,
+    cancelResponse,
     basePath,
+    toasts,
+    isConnected,
+    dismissToast,
   };
 }

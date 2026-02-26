@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Editor from '@monaco-editor/react';
 
 interface FileEntry {
@@ -67,8 +67,55 @@ function getLanguage(path: string): string {
   }
 }
 
+function VerticalDragHandle({ onDrag }: { onDrag: (deltaX: number) => void }) {
+  const handleRef = useRef<HTMLDivElement>(null);
+  const startX = useRef(0);
+
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    startX.current = e.clientX;
+    handleRef.current?.setPointerCapture(e.pointerId);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, []);
+
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!handleRef.current?.hasPointerCapture(e.pointerId)) return;
+    const delta = e.clientX - startX.current;
+    if (Math.abs(delta) < 2) return;
+    startX.current = e.clientX;
+    onDrag(delta);
+  }, [onDrag]);
+
+  const onPointerUp = useCallback((e: React.PointerEvent) => {
+    handleRef.current?.releasePointerCapture(e.pointerId);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }, []);
+
+  return (
+    <div
+      ref={handleRef}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      className="w-1 shrink-0 cursor-col-resize bg-gray-700 hover:bg-blue-500 transition-colors relative touch-none"
+      title="Drag to resize"
+    >
+      <div className="absolute inset-y-0 -left-1 -right-1" />
+    </div>
+  );
+}
+
 export default function CodeViewer({ files, activeFile, onSelectFile, fileChange, basePath }: CodeViewerProps) {
   const [displayContent, setDisplayContent] = useState('');
+  const [fileTreeWidth, setFileTreeWidth] = useState(192);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleFileTreeDrag = useCallback((deltaX: number) => {
+    setFileTreeWidth(prev => Math.max(100, Math.min(400, prev + deltaX)));
+  }, []);
 
   // Handle fileChange: auto-switch and show content immediately
   useEffect(() => {
@@ -108,9 +155,9 @@ export default function CodeViewer({ files, activeFile, onSelectFile, fileChange
   const activeLanguage = activeFile ? getLanguage(activeFile) : 'plaintext';
 
   return (
-    <div className="h-full flex bg-gray-900">
+    <div ref={containerRef} className="h-full flex bg-gray-900">
       {/* File tree sidebar */}
-      <div className="w-48 shrink-0 bg-gray-800 border-r border-gray-700 overflow-y-auto">
+      <div className="shrink-0 bg-gray-800 overflow-y-auto" style={{ width: fileTreeWidth }}>
         <div className="px-3 py-2 border-b border-gray-700">
           <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Files</h3>
         </div>
@@ -135,6 +182,8 @@ export default function CodeViewer({ files, activeFile, onSelectFile, fileChange
           )}
         </div>
       </div>
+
+      <VerticalDragHandle onDrag={handleFileTreeDrag} />
 
       {/* Editor area */}
       <div className="flex-1 overflow-hidden">

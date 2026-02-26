@@ -114,7 +114,10 @@ export default function CodeViewer({ files, activeFile, onSelectFile, fileChange
   const containerRef = useRef<HTMLDivElement>(null);
 
   const handleFileTreeDrag = useCallback((deltaX: number) => {
-    setFileTreeWidth(prev => Math.max(100, Math.min(400, prev + deltaX)));
+    const maxWidth = containerRef.current
+      ? containerRef.current.offsetWidth * 0.6
+      : 400;
+    setFileTreeWidth(prev => Math.max(100, Math.min(maxWidth, prev + deltaX)));
   }, []);
 
   // Handle fileChange: auto-switch and show content immediately

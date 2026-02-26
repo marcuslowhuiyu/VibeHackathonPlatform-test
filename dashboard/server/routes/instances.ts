@@ -94,6 +94,13 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string, pri
       instance.app_url = `${httpsUrl}preview/`;
     }
 
+    // Fix stale app_url that still points to direct IP:3000
+    if (instance.vscode_url && (!instance.app_url || instance.app_url.includes(':3000'))) {
+      const correctAppUrl = `${instance.vscode_url}preview/`;
+      updates.app_url = correctAppUrl;
+      instance.app_url = correctAppUrl;
+    }
+
     if (Object.keys(updates).length > 0) {
       updateInstance(instance.id, updates);
     }

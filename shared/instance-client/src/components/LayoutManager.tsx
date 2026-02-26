@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, ReactNode } from 'react';
-import { Code2 } from 'lucide-react';
+import { Layout, Model, Actions, TabNode, DockLocation, IJsonModel } from 'flexlayout-react';
+import { Code2, RotateCcw } from 'lucide-react';
 
 interface LayoutManagerProps {
   chatPanel: ReactNode;
@@ -7,61 +8,77 @@ interface LayoutManagerProps {
   codePanel: ReactNode;
 }
 
-function DragHandle({ onDrag }: { onDrag: (deltaX: number) => void }) {
-  const handleRef = useRef<HTMLDivElement>(null);
-  const startX = useRef(0);
-  const hasMoved = useRef(false);
+const LAYOUT_STORAGE_KEY = 'flexlayout-model-v1';
 
-  const onPointerDown = useCallback((e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    startX.current = e.clientX;
-    hasMoved.current = false;
-    handleRef.current?.setPointerCapture(e.pointerId);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  }, []);
+const DEFAULT_LAYOUT: IJsonModel = {
+  global: {
+    splitterSize: 6,
+    splitterExtra: 4,
+    tabEnableClose: false,
+    tabEnableRename: false,
+    tabSetEnableMaximize: true,
+    tabSetEnableSingleTabStretch: true,
+    tabSetEnableTabStrip: true,
+  },
+  borders: [],
+  layout: {
+    type: 'row',
+    children: [
+      {
+        type: 'tabset',
+        id: 'tabset-chat',
+        weight: 25,
+        children: [
+          { type: 'tab', id: 'tab-chat', name: 'Chat', component: 'chat', enableClose: false },
+        ],
+      },
+      {
+        type: 'tabset',
+        id: 'tabset-preview',
+        weight: 50,
+        children: [
+          { type: 'tab', id: 'tab-preview', name: 'Preview', component: 'preview', enableClose: false },
+        ],
+      },
+      {
+        type: 'tabset',
+        id: 'tabset-code',
+        weight: 25,
+        children: [
+          { type: 'tab', id: 'tab-code', name: 'Code', component: 'code', enableClose: true },
+        ],
+      },
+    ],
+  },
+};
 
-  const onPointerMove = useCallback((e: React.PointerEvent) => {
-    if (!handleRef.current?.hasPointerCapture(e.pointerId)) return;
-    const delta = e.clientX - startX.current;
-    if (!hasMoved.current && Math.abs(delta) < 2) return;
-    hasMoved.current = true;
-    startX.current = e.clientX;
-    onDrag(delta);
-  }, [onDrag]);
+function loadModel(): Model {
+  try {
+    const saved = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    if (saved) {
+      const json = JSON.parse(saved) as IJsonModel;
+      return Model.fromJson(json);
+    }
+  } catch {
+    // fall through to default
+  }
+  return Model.fromJson(DEFAULT_LAYOUT);
+}
 
-  const onPointerUp = useCallback((e: React.PointerEvent) => {
-    handleRef.current?.releasePointerCapture(e.pointerId);
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-  }, []);
-
-  return (
-    <div
-      ref={handleRef}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      className="w-1.5 shrink-0 cursor-col-resize bg-gray-800 hover:bg-blue-500 transition-colors relative group touch-none"
-      title="Drag to resize"
-    >
-      <div className="absolute inset-y-0 -left-1.5 -right-1.5" />
-    </div>
-  );
+function saveModel(model: Model) {
+  try {
+    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(model.toJson()));
+  } catch {
+    // ignore storage errors
+  }
 }
 
 export default function LayoutManager({ chatPanel, previewPanel, codePanel }: LayoutManagerProps) {
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
-  const [codeOpen, setCodeOpen] = useState(() => {
-    try { return localStorage.getItem('codePanel') === 'open'; } catch { return false; }
-  });
   const [activeTab, setActiveTab] = useState<'chat' | 'preview' | 'code'>('chat');
-
-  const [twoColWidths, setTwoColWidths] = useState<[number, number]>([30, 70]);
-  const [threeColWidths, setThreeColWidths] = useState<[number, number, number]>([25, 50, 25]);
-
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [model] = useState(loadModel);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [codeTabExists, setCodeTabExists] = useState(() => !!model.getNodeById('tab-code'));
 
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
@@ -69,54 +86,60 @@ export default function LayoutManager({ chatPanel, previewPanel, codePanel }: La
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  useEffect(() => {
-    try { localStorage.setItem('codePanel', codeOpen ? 'open' : 'closed'); } catch {}
-  }, [codeOpen]);
-
   const isMobile = windowWidth < 768;
 
-  const handleDrag2Col = useCallback((deltaX: number) => {
-    if (!containerRef.current) return;
-    const pct = (deltaX / containerRef.current.offsetWidth) * 100;
-    setTwoColWidths(prev => [
-      Math.max(15, Math.min(50, prev[0] + pct)),
-      Math.max(30, Math.min(85, prev[1] - pct)),
-    ]);
+  const factory = useCallback((node: TabNode) => {
+    const component = node.getComponent();
+    switch (component) {
+      case 'chat':
+        return chatPanel;
+      case 'preview':
+        return previewPanel;
+      case 'code':
+        return codePanel;
+      default:
+        return <div>Unknown: {component}</div>;
+    }
+  }, [chatPanel, previewPanel, codePanel]);
+
+  const onModelChange = useCallback(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => saveModel(model), 500);
+    setCodeTabExists(!!model.getNodeById('tab-code'));
+  }, [model]);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
   }, []);
 
-  const handleDrag3Left = useCallback((deltaX: number) => {
-    if (!containerRef.current) return;
-    const pct = (deltaX / containerRef.current.offsetWidth) * 100;
-    setThreeColWidths(prev => [
-      Math.max(10, Math.min(40, prev[0] + pct)),
-      Math.max(20, Math.min(70, prev[1] - pct)),
-      prev[2],
-    ]);
-  }, []);
+  const toggleCode = useCallback(() => {
+    const existing = model.getNodeById('tab-code');
+    if (existing) {
+      model.doAction(Actions.deleteTab('tab-code'));
+    } else {
+      // Add code tab to the right of the preview tabset
+      const targetTabset = model.getNodeById('tabset-preview') || model.getNodeById('tabset-chat');
+      if (targetTabset) {
+        model.doAction(
+          Actions.addNode(
+            { type: 'tab', id: 'tab-code', name: 'Code', component: 'code', enableClose: true },
+            targetTabset.getId(),
+            DockLocation.RIGHT,
+            -1,
+            true
+          )
+        );
+      }
+    }
+    setCodeTabExists(!!model.getNodeById('tab-code'));
+  }, [model]);
 
-  const handleDrag3Right = useCallback((deltaX: number) => {
-    if (!containerRef.current) return;
-    const pct = (deltaX / containerRef.current.offsetWidth) * 100;
-    setThreeColWidths(prev => [
-      prev[0],
-      Math.max(20, Math.min(70, prev[1] + pct)),
-      Math.max(10, Math.min(40, prev[2] - pct)),
-    ]);
+  const resetLayout = useCallback(() => {
+    localStorage.removeItem(LAYOUT_STORAGE_KEY);
+    window.location.reload();
   }, []);
-
-  const codeToggle = !isMobile && (
-    <button
-      onClick={() => setCodeOpen(prev => !prev)}
-      className={`fixed top-2 right-2 z-50 p-2 rounded-md border transition-colors ${
-        codeOpen
-          ? 'bg-blue-600 border-blue-500 text-white'
-          : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200 hover:bg-gray-700'
-      }`}
-      title={codeOpen ? 'Hide code panel' : 'Show code panel'}
-    >
-      <Code2 className="w-4 h-4" />
-    </button>
-  );
 
   if (isMobile) {
     const tabs = [
@@ -150,29 +173,34 @@ export default function LayoutManager({ chatPanel, previewPanel, codePanel }: La
     );
   }
 
-  if (codeOpen) {
-    return (
-      <div ref={containerRef} className="h-screen w-screen bg-gray-900 text-white">
-        {codeToggle}
-        <div className="h-full flex">
-          <div className="h-full overflow-hidden min-w-0" style={{ flex: threeColWidths[0] }}>{chatPanel}</div>
-          <DragHandle onDrag={handleDrag3Left} />
-          <div className="h-full overflow-hidden min-w-0" style={{ flex: threeColWidths[1] }}>{previewPanel}</div>
-          <DragHandle onDrag={handleDrag3Right} />
-          <div className="h-full overflow-hidden min-w-0" style={{ flex: threeColWidths[2] }}>{codePanel}</div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div ref={containerRef} className="h-screen w-screen bg-gray-900 text-white">
-      {codeToggle}
-      <div className="h-full flex">
-        <div className="h-full overflow-hidden min-w-0" style={{ flex: twoColWidths[0] }}>{chatPanel}</div>
-        <DragHandle onDrag={handleDrag2Col} />
-        <div className="h-full overflow-hidden min-w-0" style={{ flex: twoColWidths[1] }}>{previewPanel}</div>
+    <div className="h-screen w-screen bg-gray-900 text-white relative">
+      <div className="fixed top-2 right-2 z-50 flex gap-1">
+        <button
+          onClick={resetLayout}
+          className="p-2 rounded-md border bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors"
+          title="Reset layout"
+        >
+          <RotateCcw className="w-4 h-4" />
+        </button>
+        <button
+          onClick={toggleCode}
+          className={`p-2 rounded-md border transition-colors ${
+            codeTabExists
+              ? 'bg-blue-600 border-blue-500 text-white'
+              : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200 hover:bg-gray-700'
+          }`}
+          title={codeTabExists ? 'Hide code panel' : 'Show code panel'}
+        >
+          <Code2 className="w-4 h-4" />
+        </button>
       </div>
+      <Layout
+        model={model}
+        factory={factory}
+        onModelChange={onModelChange}
+        realtimeResize={true}
+      />
     </div>
   );
 }

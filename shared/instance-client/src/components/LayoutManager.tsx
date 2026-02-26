@@ -155,11 +155,11 @@ export default function LayoutManager({ chatPanel, previewPanel, codePanel }: La
       <div ref={containerRef} className="h-screen w-screen bg-gray-900 text-white">
         {codeToggle}
         <div className="h-full flex">
-          <div className="h-full overflow-hidden" style={{ width: `${threeColWidths[0]}%` }}>{chatPanel}</div>
+          <div className="h-full overflow-hidden min-w-0" style={{ flex: threeColWidths[0] }}>{chatPanel}</div>
           <DragHandle onDrag={handleDrag3Left} />
-          <div className="h-full overflow-hidden" style={{ width: `${threeColWidths[1]}%` }}>{previewPanel}</div>
+          <div className="h-full overflow-hidden min-w-0" style={{ flex: threeColWidths[1] }}>{previewPanel}</div>
           <DragHandle onDrag={handleDrag3Right} />
-          <div className="h-full overflow-hidden" style={{ width: `${threeColWidths[2]}%` }}>{codePanel}</div>
+          <div className="h-full overflow-hidden min-w-0" style={{ flex: threeColWidths[2] }}>{codePanel}</div>
         </div>
       </div>
     );
@@ -169,9 +169,9 @@ export default function LayoutManager({ chatPanel, previewPanel, codePanel }: La
     <div ref={containerRef} className="h-screen w-screen bg-gray-900 text-white">
       {codeToggle}
       <div className="h-full flex">
-        <div className="h-full overflow-hidden" style={{ width: `${twoColWidths[0]}%` }}>{chatPanel}</div>
+        <div className="h-full overflow-hidden min-w-0" style={{ flex: twoColWidths[0] }}>{chatPanel}</div>
         <DragHandle onDrag={handleDrag2Col} />
-        <div className="h-full overflow-hidden" style={{ width: `${twoColWidths[1]}%` }}>{previewPanel}</div>
+        <div className="h-full overflow-hidden min-w-0" style={{ flex: twoColWidths[1] }}>{previewPanel}</div>
       </div>
     </div>
   );

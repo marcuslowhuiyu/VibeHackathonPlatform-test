@@ -5,10 +5,11 @@ import { Code2, RotateCcw } from 'lucide-react';
 interface LayoutManagerProps {
   chatPanel: ReactNode;
   previewPanel: ReactNode;
-  codePanel: ReactNode;
+  fileTreePanel: ReactNode;
+  codeEditorPanel: ReactNode;
 }
 
-const LAYOUT_STORAGE_KEY = 'flexlayout-model-v1';
+const LAYOUT_STORAGE_KEY = 'flexlayout-model-v2';
 
 const DEFAULT_LAYOUT: IJsonModel = {
   global: {
@@ -35,9 +36,17 @@ const DEFAULT_LAYOUT: IJsonModel = {
       {
         type: 'tabset',
         id: 'tabset-preview',
-        weight: 50,
+        weight: 40,
         children: [
           { type: 'tab', id: 'tab-preview', name: 'Preview', component: 'preview', enableClose: false },
+        ],
+      },
+      {
+        type: 'tabset',
+        id: 'tabset-files',
+        weight: 10,
+        children: [
+          { type: 'tab', id: 'tab-files', name: 'Files', component: 'files', enableClose: true },
         ],
       },
       {
@@ -73,7 +82,7 @@ function saveModel(model: Model) {
   }
 }
 
-export default function LayoutManager({ chatPanel, previewPanel, codePanel }: LayoutManagerProps) {
+export default function LayoutManager({ chatPanel, previewPanel, fileTreePanel, codeEditorPanel }: LayoutManagerProps) {
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const [activeTab, setActiveTab] = useState<'chat' | 'preview' | 'code'>('chat');
   const [model] = useState(loadModel);
@@ -95,12 +104,14 @@ export default function LayoutManager({ chatPanel, previewPanel, codePanel }: La
         return chatPanel;
       case 'preview':
         return previewPanel;
+      case 'files':
+        return fileTreePanel;
       case 'code':
-        return codePanel;
+        return codeEditorPanel;
       default:
         return <div>Unknown: {component}</div>;
     }
-  }, [chatPanel, previewPanel, codePanel]);
+  }, [chatPanel, previewPanel, fileTreePanel, codeEditorPanel]);
 
   const onModelChange = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -115,22 +126,41 @@ export default function LayoutManager({ chatPanel, previewPanel, codePanel }: La
   }, []);
 
   const toggleCode = useCallback(() => {
-    const existing = model.getNodeById('tab-code');
-    if (existing) {
+    const codeExists = model.getNodeById('tab-code');
+    const filesExists = model.getNodeById('tab-files');
+
+    if (codeExists) {
+      // Remove both tabs
       model.doAction(Actions.deleteTab('tab-code'));
+      if (filesExists) {
+        model.doAction(Actions.deleteTab('tab-files'));
+      }
     } else {
-      // Add code tab to the right of the preview tabset
+      // Add both tabs to the right of the preview tabset
       const targetTabset = model.getNodeById('tabset-preview') || model.getNodeById('tabset-chat');
       if (targetTabset) {
         model.doAction(
           Actions.addNode(
-            { type: 'tab', id: 'tab-code', name: 'Code', component: 'code', enableClose: true },
+            { type: 'tab', id: 'tab-files', name: 'Files', component: 'files', enableClose: true },
             targetTabset.getId(),
             DockLocation.RIGHT,
             -1,
             true
           )
         );
+        // Add code tab to the right of the newly created files tabset
+        const filesTabset = model.getNodeById('tab-files')?.getParent();
+        if (filesTabset) {
+          model.doAction(
+            Actions.addNode(
+              { type: 'tab', id: 'tab-code', name: 'Code', component: 'code', enableClose: true },
+              filesTabset.getId(),
+              DockLocation.RIGHT,
+              -1,
+              true
+            )
+          );
+        }
       }
     }
     setCodeTabExists(!!model.getNodeById('tab-code'));
@@ -167,7 +197,12 @@ export default function LayoutManager({ chatPanel, previewPanel, codePanel }: La
         <div className="flex-1 overflow-hidden">
           {activeTab === 'chat' && chatPanel}
           {activeTab === 'preview' && previewPanel}
-          {activeTab === 'code' && codePanel}
+          {activeTab === 'code' && (
+            <div className="h-full flex">
+              <div className="w-48 shrink-0">{fileTreePanel}</div>
+              <div className="flex-1 overflow-hidden">{codeEditorPanel}</div>
+            </div>
+          )}
         </div>
       </div>
     );

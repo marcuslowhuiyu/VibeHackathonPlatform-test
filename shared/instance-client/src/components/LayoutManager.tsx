@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { Layout, Model, Actions, TabNode, DockLocation, IJsonModel } from 'flexlayout-react';
-import { Code2, RotateCcw } from 'lucide-react';
+import { Code2, LayoutGrid } from 'lucide-react';
 
 interface LayoutManagerProps {
   chatPanel: ReactNode;
@@ -11,55 +11,166 @@ interface LayoutManagerProps {
 
 const LAYOUT_STORAGE_KEY = 'flexlayout-model-v2';
 
-const DEFAULT_LAYOUT: IJsonModel = {
-  global: {
-    splitterSize: 6,
-    splitterExtra: 4,
-    tabEnableClose: false,
-    tabEnableRename: false,
-    tabSetEnableMaximize: true,
-    tabSetEnableSingleTabStretch: true,
-    tabSetEnableTabStrip: true,
+const GLOBAL_CONFIG: IJsonModel['global'] = {
+  splitterSize: 6,
+  splitterExtra: 4,
+  tabEnableClose: false,
+  tabEnableRename: false,
+  tabSetEnableMaximize: true,
+  tabSetEnableSingleTabStretch: true,
+  tabSetEnableTabStrip: true,
+};
+
+interface PresetLayout {
+  name: string;
+  description: string;
+  layout: IJsonModel;
+}
+
+const PRESET_LAYOUTS: Record<string, PresetLayout> = {
+  default: {
+    name: 'Default',
+    description: 'Chat, Preview, Files & Code',
+    layout: {
+      global: GLOBAL_CONFIG,
+      borders: [],
+      layout: {
+        type: 'row',
+        children: [
+          {
+            type: 'tabset',
+            id: 'tabset-chat',
+            weight: 25,
+            children: [
+              { type: 'tab', id: 'tab-chat', name: 'Chat', component: 'chat', enableClose: false },
+            ],
+          },
+          {
+            type: 'tabset',
+            id: 'tabset-preview',
+            weight: 40,
+            children: [
+              { type: 'tab', id: 'tab-preview', name: 'Preview', component: 'preview', enableClose: false },
+            ],
+          },
+          {
+            type: 'tabset',
+            id: 'tabset-files',
+            weight: 10,
+            children: [
+              { type: 'tab', id: 'tab-files', name: 'Files', component: 'files', enableClose: true },
+            ],
+          },
+          {
+            type: 'tabset',
+            id: 'tabset-code',
+            weight: 25,
+            children: [
+              { type: 'tab', id: 'tab-code', name: 'Code', component: 'code', enableClose: true },
+            ],
+          },
+        ],
+      },
+    },
   },
-  borders: [],
-  layout: {
-    type: 'row',
-    children: [
-      {
-        type: 'tabset',
-        id: 'tabset-chat',
-        weight: 25,
+  previewFocus: {
+    name: 'Preview Focus',
+    description: 'Maximize preview, hide code',
+    layout: {
+      global: GLOBAL_CONFIG,
+      borders: [],
+      layout: {
+        type: 'row',
         children: [
-          { type: 'tab', id: 'tab-chat', name: 'Chat', component: 'chat', enableClose: false },
+          {
+            type: 'tabset',
+            id: 'tabset-chat',
+            weight: 30,
+            children: [
+              { type: 'tab', id: 'tab-chat', name: 'Chat', component: 'chat', enableClose: false },
+            ],
+          },
+          {
+            type: 'tabset',
+            id: 'tabset-preview',
+            weight: 70,
+            children: [
+              { type: 'tab', id: 'tab-preview', name: 'Preview', component: 'preview', enableClose: false },
+            ],
+          },
         ],
       },
-      {
-        type: 'tabset',
-        id: 'tabset-preview',
-        weight: 40,
+    },
+  },
+  codeFocus: {
+    name: 'Code Focus',
+    description: 'Larger code panels for editing',
+    layout: {
+      global: GLOBAL_CONFIG,
+      borders: [],
+      layout: {
+        type: 'row',
         children: [
-          { type: 'tab', id: 'tab-preview', name: 'Preview', component: 'preview', enableClose: false },
+          {
+            type: 'tabset',
+            id: 'tabset-chat',
+            weight: 20,
+            children: [
+              { type: 'tab', id: 'tab-chat', name: 'Chat', component: 'chat', enableClose: false },
+            ],
+          },
+          {
+            type: 'tabset',
+            id: 'tabset-files',
+            weight: 10,
+            children: [
+              { type: 'tab', id: 'tab-files', name: 'Files', component: 'files', enableClose: true },
+            ],
+          },
+          {
+            type: 'tabset',
+            id: 'tabset-code',
+            weight: 40,
+            children: [
+              { type: 'tab', id: 'tab-code', name: 'Code', component: 'code', enableClose: true },
+            ],
+          },
+          {
+            type: 'tabset',
+            id: 'tabset-preview',
+            weight: 30,
+            children: [
+              { type: 'tab', id: 'tab-preview', name: 'Preview', component: 'preview', enableClose: false },
+            ],
+          },
         ],
       },
-      {
-        type: 'tabset',
-        id: 'tabset-files',
-        weight: 10,
+    },
+  },
+  presentation: {
+    name: 'Presentation',
+    description: 'Full-screen preview for demos',
+    layout: {
+      global: GLOBAL_CONFIG,
+      borders: [],
+      layout: {
+        type: 'row',
         children: [
-          { type: 'tab', id: 'tab-files', name: 'Files', component: 'files', enableClose: true },
+          {
+            type: 'tabset',
+            id: 'tabset-preview',
+            weight: 100,
+            children: [
+              { type: 'tab', id: 'tab-preview', name: 'Preview', component: 'preview', enableClose: false },
+            ],
+          },
         ],
       },
-      {
-        type: 'tabset',
-        id: 'tabset-code',
-        weight: 25,
-        children: [
-          { type: 'tab', id: 'tab-code', name: 'Code', component: 'code', enableClose: true },
-        ],
-      },
-    ],
+    },
   },
 };
+
+const DEFAULT_LAYOUT = PRESET_LAYOUTS.default.layout;
 
 function loadModel(): Model {
   try {
@@ -88,6 +199,8 @@ export default function LayoutManager({ chatPanel, previewPanel, fileTreePanel, 
   const [model] = useState(loadModel);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [codeTabExists, setCodeTabExists] = useState(() => !!model.getNodeById('tab-code'));
+  const [showPresets, setShowPresets] = useState(false);
+  const presetsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
@@ -166,10 +279,23 @@ export default function LayoutManager({ chatPanel, previewPanel, fileTreePanel, 
     setCodeTabExists(!!model.getNodeById('tab-code'));
   }, [model]);
 
-  const resetLayout = useCallback(() => {
-    localStorage.removeItem(LAYOUT_STORAGE_KEY);
+  const applyPreset = useCallback((key: string) => {
+    const preset = PRESET_LAYOUTS[key];
+    if (!preset) return;
+    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(preset.layout));
     window.location.reload();
   }, []);
+
+  useEffect(() => {
+    if (!showPresets) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (presetsRef.current && !presetsRef.current.contains(e.target as Node)) {
+        setShowPresets(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showPresets]);
 
   if (isMobile) {
     const tabs = [
@@ -211,13 +337,29 @@ export default function LayoutManager({ chatPanel, previewPanel, fileTreePanel, 
   return (
     <div className="h-screen w-screen bg-gray-900 text-white relative">
       <div className="fixed top-2 right-2 z-50 flex gap-1">
-        <button
-          onClick={resetLayout}
-          className="p-2 rounded-md border bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors"
-          title="Reset layout"
-        >
-          <RotateCcw className="w-4 h-4" />
-        </button>
+        <div ref={presetsRef} className="relative">
+          <button
+            onClick={() => setShowPresets((v) => !v)}
+            className="p-2 rounded-md border bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors"
+            title="Layout presets"
+          >
+            <LayoutGrid className="w-4 h-4" />
+          </button>
+          {showPresets && (
+            <div className="absolute right-0 top-full mt-1 w-56 rounded-md border border-gray-700 bg-gray-800 shadow-lg py-1">
+              {Object.entries(PRESET_LAYOUTS).map(([key, preset]) => (
+                <button
+                  key={key}
+                  onClick={() => applyPreset(key)}
+                  className="w-full text-left px-3 py-2 hover:bg-gray-700 transition-colors"
+                >
+                  <div className="text-sm text-gray-200">{preset.name}</div>
+                  <div className="text-xs text-gray-500">{preset.description}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <button
           onClick={toggleCode}
           className={`p-2 rounded-md border transition-colors ${

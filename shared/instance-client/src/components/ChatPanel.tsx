@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { RotateCcw, Square } from 'lucide-react';
+import { RotateCcw, Square, Copy, Check } from 'lucide-react';
 
 interface ToolCall {
   name: string;
@@ -131,6 +131,29 @@ function ThinkingIndicator({ text }: { text: string }) {
   );
 }
 
+function CodeBlock({ children }: { children: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(children);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div className="relative group">
+      <button
+        onClick={copy}
+        className="absolute right-2 top-2 p-1 rounded bg-gray-700 text-gray-400 hover:text-gray-200 opacity-0 group-hover:opacity-100 transition-opacity"
+        title={copied ? 'Copied!' : 'Copy code'}
+      >
+        {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+      </button>
+      <code className="block bg-gray-800 border border-gray-700 rounded-md p-3 text-xs font-mono text-gray-300 overflow-x-auto whitespace-pre">
+        {children}
+      </code>
+    </div>
+  );
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const markdownComponents: Record<string, any> = {
   p: ({ children }: any) => <p className="my-1 text-sm text-gray-200">{children}</p>,
@@ -146,11 +169,8 @@ const markdownComponents: Record<string, any> = {
   code: ({ className, children, ...props }: any) => {
     const isBlock = className?.includes('language-');
     if (isBlock) {
-      return (
-        <code className="block bg-gray-800 border border-gray-700 rounded-md p-3 text-xs font-mono text-gray-300 overflow-x-auto whitespace-pre" {...props}>
-          {children}
-        </code>
-      );
+      const text = String(children).replace(/\n$/, '');
+      return <CodeBlock>{text}</CodeBlock>;
     }
     return <code className="bg-gray-800 text-blue-300 px-1 py-0.5 rounded text-xs font-mono" {...props}>{children}</code>;
   },

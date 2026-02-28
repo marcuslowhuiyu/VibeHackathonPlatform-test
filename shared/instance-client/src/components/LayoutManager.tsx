@@ -286,6 +286,21 @@ export default function LayoutManager({ chatPanel, previewPanel, fileTreePanel, 
     window.location.reload();
   }, []);
 
+  // Keyboard shortcuts for layout presets (Ctrl/Cmd+1 through Ctrl/Cmd+4)
+  useEffect(() => {
+    const presetKeys = ['default', 'previewFocus', 'codeFocus', 'presentation'];
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key >= '1' && e.key <= '4') {
+        e.preventDefault();
+        applyPreset(presetKeys[parseInt(e.key) - 1]);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [applyPreset]);
+
+  const isMac = navigator.platform.toUpperCase().includes('MAC');
+
   useEffect(() => {
     if (!showPresets) return;
     const handleClickOutside = (e: MouseEvent) => {
@@ -347,13 +362,18 @@ export default function LayoutManager({ chatPanel, previewPanel, fileTreePanel, 
           </button>
           {showPresets && (
             <div className="absolute right-0 top-full mt-1 w-56 rounded-md border border-gray-700 bg-gray-800 shadow-lg py-1">
-              {Object.entries(PRESET_LAYOUTS).map(([key, preset]) => (
+              {Object.entries(PRESET_LAYOUTS).map(([key, preset], idx) => (
                 <button
                   key={key}
                   onClick={() => applyPreset(key)}
                   className="w-full text-left px-3 py-2 hover:bg-gray-700 transition-colors"
                 >
-                  <div className="text-sm text-gray-200">{preset.name}</div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-200">{preset.name}</span>
+                    <span className="text-xs text-gray-600 ml-2">
+                      {isMac ? '\u2318' : 'Ctrl+'}{idx + 1}
+                    </span>
+                  </div>
                   <div className="text-xs text-gray-500">{preset.description}</div>
                 </button>
               ))}

@@ -1,1 +1,26 @@
 @import "tailwindcss";
+@import "flexlayout-react/style/dark.css";
+
+.flexlayout__layout {
+  --color-text: #e5e7eb;
+  --color-background: #111827;
+  --color-base: #111827;
+  --color-1: #1f2937;
+  --color-2: #1f2937;
+  --color-3: #374151;
+  --color-4: #4b5563;
+  --color-5: #6b7280;
+  --color-6: #9ca3af;
+  --color-splitter: #1f2937;
+  --color-splitter-hover: #3b82f6;
+  --color-splitter-drag: #3b82f6;
+  --color-tab-selected: #e5e7eb;
+  --color-tab-selected-background: #374151;
+  --color-tab-unselected: #9ca3af;
+  --color-tab-unselected-background: transparent;
+  --color-tabset-background: #1f2937;
+  --color-tabset-divider-line: #374151;
+  --color-drag-rect-border: #3b82f6;
+  --color-drag-rect-background: #1f2937;
+  --font-size: 0.875rem;
+}

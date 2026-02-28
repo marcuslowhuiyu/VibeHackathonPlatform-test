@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import LayoutManager from './components/LayoutManager';
 import ChatPanel from './components/ChatPanel';
-import CodeViewer from './components/CodeViewer';
+import { FileTree, CodeEditor } from './components/CodeViewer';
 import ElementHighlighter from './components/ElementHighlighter';
 
 interface FileEntry {
@@ -16,6 +16,7 @@ export default function App() {
 
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [activeFile, setActiveFile] = useState<string | null>(null);
+  const [displayContent, setDisplayContent] = useState('');
   const [previewRefreshKey, setPreviewRefreshKey] = useState(0);
   const [inspectorEnabled, setInspectorEnabled] = useState(true);
 
@@ -58,6 +59,37 @@ export default function App() {
       setPreviewRefreshKey((k) => k + 1);
     }
   }, [currentFileChange, fetchFiles]);
+
+  // Handle fileChange: auto-switch and show content immediately
+  useEffect(() => {
+    if (!currentFileChange) return;
+    setActiveFile(currentFileChange.path);
+    if (currentFileChange.content) {
+      setDisplayContent(currentFileChange.content);
+    }
+  }, [currentFileChange]);
+
+  // When activeFile changes, fetch its content on demand
+  useEffect(() => {
+    if (!activeFile) {
+      setDisplayContent('');
+      return;
+    }
+    // If the fileChange just set content for this file, skip the fetch
+    if (currentFileChange?.path === activeFile && currentFileChange?.content) {
+      return;
+    }
+    fetch(`${basePath}/api/file/${activeFile}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.content) {
+          setDisplayContent(data.content);
+        }
+      })
+      .catch(() => {
+        setDisplayContent('// Failed to load file');
+      });
+  }, [activeFile, basePath]);
 
   // Preview URL: always use the /preview/ proxy to keep the iframe same-origin.
   // Trailing slash is critical: it makes the browser resolve relative URLs
@@ -136,13 +168,17 @@ export default function App() {
         />
       }
       previewPanel={previewPanel}
-      codePanel={
-        <CodeViewer
+      fileTreePanel={
+        <FileTree
           files={files.filter(f => f.type === 'file')}
           activeFile={activeFile}
           onSelectFile={handleSelectFile}
-          fileChange={currentFileChange}
-          basePath={basePath}
+        />
+      }
+      codeEditorPanel={
+        <CodeEditor
+          activeFile={activeFile}
+          displayContent={displayContent}
         />
       }
     />

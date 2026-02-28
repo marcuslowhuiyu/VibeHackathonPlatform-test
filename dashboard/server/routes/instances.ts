@@ -83,11 +83,24 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string, pri
           ? `http://${albConfig.albDnsName}${accessPath}/`
           : `http://${publicIp}:8080`;
       updates.vscode_url = url;
+      updates.app_url = `${url}preview/`;
       instance.vscode_url = url;
+      instance.app_url = `${url}preview/`;
     } else if (cloudfrontDomain && !instance.vscode_url.startsWith('https://')) {
       const httpsUrl = `https://${cloudfrontDomain}${accessPath}/`;
       updates.vscode_url = httpsUrl;
+      updates.app_url = `${httpsUrl}preview/`;
       instance.vscode_url = httpsUrl;
+      instance.app_url = `${httpsUrl}preview/`;
+    }
+
+    // Always keep app_url in sync with vscode_url
+    if (instance.vscode_url) {
+      const expectedAppUrl = `${instance.vscode_url}preview/`;
+      if (instance.app_url !== expectedAppUrl) {
+        updates.app_url = expectedAppUrl;
+        instance.app_url = expectedAppUrl;
+      }
     }
 
     if (Object.keys(updates).length > 0) {
@@ -103,7 +116,7 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string, pri
     updateInstance(instance.id, {
       public_ip: publicIp,
       vscode_url: `http://${publicIp}:8080`,
-      app_url: `http://${publicIp}:3000`,
+      app_url: `http://${publicIp}:8080/preview/`,
     });
     return;
   }
@@ -114,7 +127,7 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string, pri
     updateInstance(instance.id, {
       public_ip: publicIp,
       vscode_url: `http://${publicIp}:8080`,
-      app_url: `http://${publicIp}:3000`,
+      app_url: `http://${publicIp}:8080/preview/`,
     });
     return;
   }
@@ -128,21 +141,19 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string, pri
       albConfig.listenerArn
     );
 
-    // Save ALB registration fields but do NOT set vscode_url yet.
-    // The URL will be set on subsequent polling calls once the target is healthy.
+    // Save ALB registration fields but do NOT set vscode_url or app_url yet.
+    // Both URLs will be set on subsequent polling calls once the target is healthy.
     updateInstance(instance.id, {
       alb_target_group_arn: result.targetGroupArn,
       alb_rule_arn: result.ruleArn,
       alb_access_path: result.accessPath,
       public_ip: publicIp,
-      app_url: `http://${publicIp}:3000`,
     });
 
     instance.alb_target_group_arn = result.targetGroupArn;
     instance.alb_rule_arn = result.ruleArn;
     instance.alb_access_path = result.accessPath;
     instance.public_ip = publicIp;
-    instance.app_url = `http://${publicIp}:3000`;
 
     console.log(`[ALB] Instance registered, waiting for target to become healthy before setting URL`);
   } catch (err: any) {
@@ -151,7 +162,7 @@ async function registerInstanceWithALB(instance: Instance, publicIp: string, pri
     updateInstance(instance.id, {
       public_ip: publicIp,
       vscode_url: `http://${publicIp}:8080`,
-      app_url: `http://${publicIp}:3000`,
+      app_url: `http://${publicIp}:8080/preview/`,
     });
   }
 }
@@ -580,7 +591,7 @@ router.get('/orphaned/scan', async (req, res) => {
         started_at: task.startedAt,
         task_definition: task.taskDefinition,
         vscode_url: task.publicIp ? `http://${task.publicIp}:8080` : null,
-        app_url: task.publicIp ? `http://${task.publicIp}:3000` : null,
+        app_url: task.publicIp ? `http://${task.publicIp}:8080/preview/` : null,
       })),
     });
   } catch (err: any) {
